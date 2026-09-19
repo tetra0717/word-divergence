@@ -38,7 +38,7 @@ object ForceGraphLayout {
             SimNode(
                 id = it.id,
                 parentId = it.parentId,
-                radius = it.visualRadius(),
+                radius = it.collisionRadius(),
                 root = it.parentId == null,
                 x = it.x,
                 y = it.y
@@ -71,6 +71,10 @@ object ForceGraphLayout {
                     node.vy = 0f
                     continue
                 }
+
+                // Obsidian-style center force: gentle, continuous compacting force.
+                fx[i] += -node.x * 0.00115f * alpha
+                fy[i] += -node.y * 0.00115f * alpha
 
                 node.vx = (node.vx + fx[i]).coerceIn(-32f, 32f) * 0.72f
                 node.vy = (node.vy + fy[i]).coerceIn(-32f, 32f) * 0.72f
@@ -108,7 +112,7 @@ object ForceGraphLayout {
                 distance = 1f
             }
 
-            val desired = parent.radius + child.radius + 125f
+            val desired = parent.radius + child.radius + 105f
             val spring = (distance - desired) * 0.045f * alpha
             val ux = dx / distance
             val uy = dy / distance
@@ -130,7 +134,7 @@ object ForceGraphLayout {
         fy: FloatArray,
         alpha: Float
     ) {
-        val cellSize = 320f
+        val cellSize = 420f
         val grid = buildGrid(nodes, cellSize)
 
         for (i in nodes.indices) {
@@ -162,9 +166,9 @@ object ForceGraphLayout {
                         if (distance < minDistance) {
                             push += (minDistance - distance) * 0.60f * alpha
                         }
-                        if (distance < 300f) {
+                        if (distance < 400f) {
                             val safe = max(distance, 35f)
-                            push += min(12f, 12000f / (safe * safe)) * alpha
+                            push += min(15f, 19000f / (safe * safe)) * alpha
                         }
 
                         if (push <= 0f) continue
