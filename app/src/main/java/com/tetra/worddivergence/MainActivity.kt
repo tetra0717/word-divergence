@@ -11,6 +11,7 @@ import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -47,6 +48,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private lateinit var randomPanel: LinearLayout
     private lateinit var seedInput: EditText
     private lateinit var branchInput: EditText
+    private lateinit var similarityInput: EditText
     private lateinit var detailText: TextView
     private lateinit var engineText: TextView
     private lateinit var randomInput: EditText
@@ -112,6 +114,16 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(BG)
+            setOnApplyWindowInsetsListener { view, insets ->
+                @Suppress("DEPRECATION")
+                view.setPadding(
+                    0,
+                    insets.systemWindowInsetTop,
+                    0,
+                    insets.systemWindowInsetBottom
+                )
+                insets
+            }
         }
 
         val toolbar = LinearLayout(this).apply {
@@ -198,16 +210,29 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
             textSize = 14f
             setTextColor(TEXT)
             background = rounded(FIELD, 12f)
-            hint = "枝"
+            hint = "上限"
+        }
+
+        similarityInput = EditText(this).apply {
+            setText("0.45")
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            gravity = Gravity.CENTER
+            textSize = 13f
+            setTextColor(TEXT)
+            background = rounded(FIELD, 12f)
+            hint = "類似度"
         }
 
         val generate = primaryButton("生成") { createMap(seedInput.text.toString()) }
 
         inputRow.addView(seedInput, LinearLayout.LayoutParams(0, dp(48), 1f))
-        inputRow.addView(branchInput, LinearLayout.LayoutParams(dp(58), dp(48)).apply {
+        inputRow.addView(branchInput, LinearLayout.LayoutParams(dp(56), dp(48)).apply {
             marginStart = dp(8)
         })
-        inputRow.addView(generate, LinearLayout.LayoutParams(dp(72), dp(48)).apply {
+        inputRow.addView(similarityInput, LinearLayout.LayoutParams(dp(66), dp(48)).apply {
+            marginStart = dp(8)
+        })
+        inputRow.addView(generate, LinearLayout.LayoutParams(dp(68), dp(48)).apply {
             marginStart = dp(8)
         })
         controls.addView(inputRow)
@@ -366,12 +391,18 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
         current?.let { persist(it) }
         val branches = branchInput.text.toString().toIntOrNull()?.coerceIn(1, 30) ?: 5
+        val minSimilarity = similarityInput.text.toString()
+            .toFloatOrNull()
+            ?.coerceIn(0f, 1f)
+            ?: 0.45f
+        similarityInput.setText(String.format("%.2f", minSimilarity))
 
         val session = GraphSession(
             id = UUID.randomUUID().toString(),
             title = seed,
             rootText = seed,
             branchCount = branches,
+            minSimilarity = minSimilarity,
             posFilter = currentFilter()
         )
 
@@ -381,6 +412,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
             parentId = null,
             depth = 0,
             semanticDistance = 0f,
+            parentSimilarity = 1f,
             angle = 0f,
             x = 0f,
             y = 0f
@@ -411,6 +443,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
                     node.text,
                     node.semanticDistance,
                     session.branchCount,
+                    session.minSimilarity,
                     filter
                 )
             }
@@ -475,7 +508,8 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     override fun onNodeSelected(nodeId: String) {
         val node = current?.nodes?.get(nodeId) ?: return
         detailText.text = node.text +
-            "   意味距離 " + String.format("%.3f", node.semanticDistance) +
+            "   親との関連度 " + String.format("%.3f", node.parentSimilarity) +
+            "   ルート距離 " + String.format("%.3f", node.semanticDistance) +
             "   深さ " + node.depth
     }
 
@@ -589,6 +623,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         current = session
         seedInput.setText(session.rootText)
         branchInput.setText(session.branchCount.toString())
+        similarityInput.setText(String.format("%.2f", session.minSimilarity))
 
         PosCategory.values().forEach { posState[it] = it in session.posFilter.enabled }
         updateFilterLabel()
