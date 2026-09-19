@@ -54,18 +54,17 @@ class UsearchSemanticEngine(modelDir: File) : SemanticEngine {
         parentText: String,
         parentDistance: Float,
         count: Int,
+        minSimilarity: Float,
         filter: PosFilter
     ): List<Candidate> {
         val root = vectorForText(rootText) ?: return emptyList()
         val parent = vectorForText(parentText) ?: return emptyList()
         val wanted = count.coerceIn(1, 50)
-        val step = 0.085f
-        val target = (parentDistance + step).coerceAtMost(1.25f)
+        val threshold = minSimilarity.coerceIn(0f, 1f)
 
-        // HNSW is queried around the parent because each child should remain a
-        // genuine association of that parent. Root-distance progression is then
-        // used as a constraint, not as the final ranking criterion.
-        val keys = index.search(parent, maxOf(900, wanted * 140).toLong())
+        // HNSW is queried around the parent. We never force-fill to the requested
+        // count: candidates below the user-visible relatedness threshold are dropped.
+        val keys = index.search(parent, maxOf(900, wanted * 160).toLong())
         val sentenceMode = isSentenceLike(parentText)
 
         data class ScoredCandidate(
@@ -81,13 +80,7 @@ class UsearchSemanticEngine(modelDir: File) : SemanticEngine {
             if (!filter.allows(row.second)) continue
             if (row.first == parentText || row.first == rootText) continue
 
-            val v = runCatching { index.get(key) }.getOrNull() ?: continue
-            val rootDistance = (1f - cosine(root, v)).coerceIn(0f, 2f)
-
-            // Preserve the "walk outward" behavior: a child must be farther
-            // from the root than its parent.
-            if (rootDistance <= parentDistance + 0.012f) continue
-
+            val rawVector = runCatching { index.get(key) }.getOrNull() ?: continue
             val generated = if (sentenceMode) {
                 replaceOneKnownToken(parentText, row.first)
             } else {
@@ -95,47 +88,35 @@ class UsearchSemanticEngine(modelDir: File) : SemanticEngine {
             }
             if (generated == parentText) continue
 
+            // For phrases/sentences, score the generated phrase itself rather than
+            // the single replacement token. This keeps the threshold meaningful.
+            val generatedVector = if (sentenceMode) {
+                vectorForText(generated) ?: continue
+            } else {
+                rawVector
+            }
+            val parentSimilarity = cosine(parent, generatedVector)
+            if (parentSimilarity < threshold) continue
+
+            val rootDistance = (1f - cosine(root, generatedVector)).coerceIn(0f, 2f)
+            if (rootDistance <= parentDistance + 0.012f) continue
+
             pool += ScoredCandidate(
                 text = generated,
                 rootDistance = rootDistance,
-                parentSimilarity = cosine(parent, v)
+                parentSimilarity = parentSimilarity
             )
         }
 
-        val unique = pool
+        return pool
             .distinctBy { it.text }
-
-        if (unique.isEmpty()) return emptyList()
-
-        // First keep candidates near the desired outward step. Within that band,
-        // choose the words most semantically related to the actual parent.
-        // If the band is too sparse, widen it deterministically until enough
-        // candidates are available.
-        val halfBands = floatArrayOf(
-            step * 0.50f,
-            step * 0.85f,
-            step * 1.25f,
-            step * 1.75f,
-            step * 2.50f,
-            Float.POSITIVE_INFINITY
-        )
-
-        var eligible: List<ScoredCandidate> = emptyList()
-        for (halfBand in halfBands) {
-            eligible = unique.filter { candidate ->
-                abs(candidate.rootDistance - target) <= halfBand
-            }
-            if (eligible.size >= wanted || halfBand.isInfinite()) break
-        }
-
-        return eligible
             .sortedWith(
                 compareByDescending<ScoredCandidate> { it.parentSimilarity }
-                    .thenBy { abs(it.rootDistance - target) }
+                    .thenBy { it.rootDistance - parentDistance }
                     .thenBy { it.text }
             )
             .take(wanted)
-            .map { Candidate(it.text, it.rootDistance) }
+            .map { Candidate(it.text, it.rootDistance, it.parentSimilarity) }
     }
 
     override fun randomWords(seed: String?, count: Int, filter: PosFilter): List<String> {
