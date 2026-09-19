@@ -2,7 +2,7 @@ name: Android CI
 
 concurrency:
   group: word-divergence-main-signing
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 on:
   push:
