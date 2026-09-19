@@ -32,7 +32,7 @@ This creates:
 - model-pack/metadata.json
 - model-pack/ja-fasttext-usearch-pack.zip
 
-The index keeps all well-formed vocabulary rows at 300 dimensions and uses int8 scalar storage inside HNSW. It does not reduce 300 dimensions to 100/150 etc.
+The index keeps all well-formed vocabulary rows at 300 dimensions and uses float16 scalar storage inside HNSW. It does not reduce 300 dimensions to 100/150 etc.
 
 ## Android installation
 
