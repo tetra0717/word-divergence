@@ -721,28 +721,44 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     }
 
     private fun showModelMenu() {
-        val installed = modelPack.isInstalled()
-        val message = when (engine) {
-            is UsearchSemanticEngine ->
-                "200万語のfastText + HNSWローカルモデルを使用中です。"
-
-            is DemoSemanticEngine ->
-                "フル日本語モデルは未導入です。\n現在のDEMOはUI確認用で、意味的な連想品質は保証しません。"
-
-            else ->
-                "モデルファイルはありますが、読み込みに失敗しています。\n" +
-                    (engineLoadError ?: "原因不明") +
-                    "\n\n再ダウンロードしてください。"
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("日本語モデル")
-            .setMessage(message)
-            .setPositiveButton(if (installed) "再ダウンロード" else "ダウンロード") { _, _ ->
-                downloadModel()
+        when (engine) {
+            is UsearchSemanticEngine -> {
+                AlertDialog.Builder(this)
+                    .setTitle("日本語モデル")
+                    .setMessage(
+                        "200万語のfastText + HNSWローカルモデルを使用中です。\n" +
+                            "アプリを更新しても、このモデルはそのまま保持されます。"
+                    )
+                    .setPositiveButton("閉じる", null)
+                    .setNeutralButton("モデルを再取得") { _, _ -> downloadModel() }
+                    .show()
             }
-            .setNegativeButton("閉じる", null)
-            .show()
+
+            is DemoSemanticEngine -> {
+                AlertDialog.Builder(this)
+                    .setTitle("日本語モデル")
+                    .setMessage(
+                        "フル日本語モデルは未導入です。\n" +
+                            "Brainstormを使うには初回のみダウンロードしてください。"
+                    )
+                    .setPositiveButton("ダウンロード") { _, _ -> downloadModel() }
+                    .setNegativeButton("閉じる", null)
+                    .show()
+            }
+
+            else -> {
+                AlertDialog.Builder(this)
+                    .setTitle("モデル読み込みエラー")
+                    .setMessage(
+                        "モデルファイルはありますが、読み込みに失敗しています。\n" +
+                            (engineLoadError ?: "原因不明") +
+                            "\n\nモデルを再取得してください。"
+                    )
+                    .setPositiveButton("モデルを再取得") { _, _ -> downloadModel() }
+                    .setNegativeButton("閉じる", null)
+                    .show()
+            }
+        }
     }
 
     private fun downloadModel() {
