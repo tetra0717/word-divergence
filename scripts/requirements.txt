@@ -1,0 +1,4 @@
+numpy>=2.0
+usearch==2.26.2
+fugashi>=1.4
+unidic-lite>=1.0.8
