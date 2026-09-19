@@ -25,6 +25,7 @@ class UnavailableSemanticEngine(
         parentText: String,
         parentDistance: Float,
         count: Int,
+        minSimilarity: Float,
         filter: PosFilter
     ): List<Candidate> = fail()
 
