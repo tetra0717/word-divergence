@@ -3,18 +3,16 @@ package com.tetra.worddivergence
 import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
-import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -25,6 +23,7 @@ import com.tetra.worddivergence.engine.DemoSemanticEngine
 import com.tetra.worddivergence.engine.ModelPackManager
 import com.tetra.worddivergence.engine.SemanticEngine
 import com.tetra.worddivergence.engine.UsearchSemanticEngine
+import com.tetra.worddivergence.graph.ForceGraphLayout
 import com.tetra.worddivergence.graph.SemanticGraphView
 import com.tetra.worddivergence.model.GraphNode
 import com.tetra.worddivergence.model.GraphSession
@@ -42,7 +41,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private val main = Handler(Looper.getMainLooper())
 
     private lateinit var graphView: SemanticGraphView
-    private lateinit var brainstormPanel: LinearLayout
+    private lateinit var brainstormPanel: FrameLayout
     private lateinit var randomPanel: LinearLayout
     private lateinit var seedInput: EditText
     private lateinit var branchInput: EditText
@@ -51,16 +50,55 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private lateinit var randomInput: EditText
     private lateinit var randomCountInput: EditText
     private lateinit var randomResults: LinearLayout
+    private lateinit var brainstormTab: TextView
+    private lateinit var randomTab: TextView
+    private lateinit var filterButton: TextView
 
-    private val posChecks = linkedMapOf<PosCategory, CheckBox>()
+    private val posState = linkedMapOf<PosCategory, Boolean>()
     private var current: GraphSession? = null
     private var activeExpansions = 0
-    private var lastAutoAt = 0L
+    private var layoutRunning = false
+    private var layoutQueued = false
+    private var lastViewportActivityAt = 0L
+    private var frontierWatchPosted = false
+
+    private val frontierWatch = object : Runnable {
+        override fun run() {
+            frontierWatchPosted = false
+            val now = System.currentTimeMillis()
+            if (now - lastViewportActivityAt > FRONTIER_ACTIVE_MS) return
+
+            val session = current ?: return
+            if (session.nodes.size >= MAX_NODES) return
+
+            if (activeExpansions < 2) {
+                val candidate = graphView.frontierNodeIds()
+                    .asSequence()
+                    .mapNotNull { session.nodes[it] }
+                    .filter { !it.expanded && !it.loading && it.parentId != null }
+                    .maxByOrNull { graphView.distanceFromViewportCenter(it) }
+
+                if (candidate != null) expandNode(candidate)
+            }
+
+            frontierWatchPosted = true
+            main.postDelayed(this, 280L)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = GraphStore(this)
         modelPack = ModelPackManager(this)
+
+        PosCategory.values().forEach {
+            posState[it] = it in setOf(
+                PosCategory.NOUN,
+                PosCategory.VERB,
+                PosCategory.ADJECTIVE
+            )
+        }
+
         refreshEngine()
         setContentView(buildUi())
         graphView.listener = this
@@ -71,45 +109,44 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private fun buildUi(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(250, 250, 250))
+            setBackgroundColor(BG)
         }
 
-        val top = LinearLayout(this).apply {
+        val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(6))
+            setPadding(dp(14), dp(8), dp(10), dp(8))
+            background = solid(Color.WHITE)
+            elevation = dpF(2f)
         }
-        val brainstormTab = Button(this).apply {
-            text = "Brainstorm"
-            isAllCaps = false
-            setOnClickListener { showTab(true) }
+
+        val title = TextView(this).apply {
+            text = "word divergence"
+            textSize = 16f
+            setTextColor(TEXT)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         }
-        val randomTab = Button(this).apply {
-            text = "Random"
-            isAllCaps = false
-            setOnClickListener { showTab(false) }
+        toolbar.addView(title, LinearLayout.LayoutParams(0, dp(42), 1f).apply {
+            gravity = Gravity.CENTER_VERTICAL
+        })
+
+        val tabs = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(MUTED, 14f)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
         }
-        val history = Button(this).apply {
-            text = "履歴 / ☆"
-            isAllCaps = false
-            setOnClickListener { showHistory() }
-        }
-        val model = Button(this).apply {
-            text = "モデル"
-            isAllCaps = false
-            setOnClickListener { showModelMenu() }
-        }
-        engineText = TextView(this).apply {
-            textSize = 12f
-            setTextColor(Color.DKGRAY)
-            setPadding(dp(8), 0, 0, 0)
-        }
-        top.addView(brainstormTab)
-        top.addView(randomTab)
-        top.addView(history)
-        top.addView(model)
-        top.addView(engineText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        root.addView(top)
+        brainstormTab = compactTab("Graph") { showTab(true) }
+        randomTab = compactTab("Random") { showTab(false) }
+        tabs.addView(brainstormTab)
+        tabs.addView(randomTab)
+        toolbar.addView(tabs)
+
+        toolbar.addView(iconButton("☆") { showHistory() }, LinearLayout.LayoutParams(dp(42), dp(42)).apply {
+            marginStart = dp(6)
+        })
+        toolbar.addView(iconButton("↓") { showModelMenu() }, LinearLayout.LayoutParams(dp(42), dp(42)))
+
+        root.addView(toolbar, LinearLayout.LayoutParams(-1, dp(58)))
 
         val content = FrameLayout(this)
         brainstormPanel = buildBrainstormPanel()
@@ -123,66 +160,102 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         return root
     }
 
-    private fun buildBrainstormPanel(): LinearLayout {
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+    private fun buildBrainstormPanel(): FrameLayout {
+        val panel = FrameLayout(this).apply { setBackgroundColor(BG) }
+
+        graphView = SemanticGraphView(this)
+        panel.addView(graphView, FrameLayout.LayoutParams(-1, -1))
+
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = rounded(Color.WHITE, 18f, STROKE)
+            elevation = dpF(8f)
+        }
 
         val inputRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(4), dp(12), dp(4))
         }
+
         seedInput = EditText(this).apply {
-            hint = "単語 / 文章"
+            hint = "単語や文章を入力"
             isSingleLine = true
+            textSize = 15f
+            setTextColor(TEXT)
+            setHintTextColor(SUBTLE)
+            setPadding(dp(12), 0, dp(12), 0)
+            background = rounded(FIELD, 12f)
             setText("海")
         }
+
         branchInput = EditText(this).apply {
             setText("5")
             inputType = InputType.TYPE_CLASS_NUMBER
-            hint = "枝数"
             gravity = Gravity.CENTER
+            textSize = 14f
+            setTextColor(TEXT)
+            background = rounded(FIELD, 12f)
+            hint = "枝"
         }
-        val generate = Button(this).apply {
-            text = "生成"
-            isAllCaps = false
-            setOnClickListener { createMap(seedInput.text.toString()) }
-        }
-        inputRow.addView(seedInput, LinearLayout.LayoutParams(0, dp(48), 1f))
-        inputRow.addView(branchInput, LinearLayout.LayoutParams(dp(64), dp(48)))
-        inputRow.addView(generate, LinearLayout.LayoutParams(dp(74), dp(48)))
-        panel.addView(inputRow)
 
-        val filterScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-        }
-        val filterRow = LinearLayout(this).apply {
+        val generate = primaryButton("生成") { createMap(seedInput.text.toString()) }
+
+        inputRow.addView(seedInput, LinearLayout.LayoutParams(0, dp(48), 1f))
+        inputRow.addView(branchInput, LinearLayout.LayoutParams(dp(58), dp(48)).apply {
+            marginStart = dp(8)
+        })
+        inputRow.addView(generate, LinearLayout.LayoutParams(dp(72), dp(48)).apply {
+            marginStart = dp(8)
+        })
+        controls.addView(inputRow)
+
+        val metaRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12), 0, dp(12), dp(2))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(8), 0, 0)
         }
-        PosCategory.values().forEach { category ->
-            val cb = CheckBox(this).apply {
-                text = category.label
-                isChecked = category in setOf(PosCategory.NOUN, PosCategory.VERB, PosCategory.ADJECTIVE)
-                setOnCheckedChangeListener { _, _ ->
-                    current?.posFilter = currentFilter()
-                }
+
+        filterButton = secondaryButton("品詞") { showPartOfSpeechDialog() }
+        metaRow.addView(filterButton, LinearLayout.LayoutParams(-2, dp(36)))
+
+        engineText = TextView(this).apply {
+            textSize = 11f
+            setTextColor(SUBTLE)
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            setPadding(dp(10), 0, 0, 0)
+        }
+        metaRow.addView(engineText, LinearLayout.LayoutParams(0, dp(36), 1f))
+        controls.addView(metaRow)
+
+        panel.addView(
+            controls,
+            FrameLayout.LayoutParams(-1, -2).apply {
+                leftMargin = dp(12)
+                rightMargin = dp(12)
+                topMargin = dp(12)
+                gravity = Gravity.TOP
             }
-            posChecks[category] = cb
-            filterRow.addView(cb)
-        }
-        filterScroll.addView(filterRow)
-        panel.addView(filterScroll, LinearLayout.LayoutParams(-1, dp(44)))
+        )
 
         detailText = TextView(this).apply {
-            text = "ノードをタップすると意味距離を表示。長押しで☆ / 新しい中心。"
+            text = "タップで詳細・長押しで保存 / 新しい中心"
             textSize = 12f
-            setTextColor(Color.rgb(80, 80, 88))
-            setPadding(dp(14), dp(2), dp(12), dp(6))
+            setTextColor(Color.rgb(71, 76, 87))
+            setPadding(dp(13), dp(9), dp(13), dp(9))
+            background = rounded(Color.argb(238, 255, 255, 255), 14f, STROKE)
+            elevation = dpF(5f)
         }
-        panel.addView(detailText)
 
-        graphView = SemanticGraphView(this)
-        panel.addView(graphView, LinearLayout.LayoutParams(-1, 0, 1f))
+        panel.addView(
+            detailText,
+            FrameLayout.LayoutParams(-2, -2).apply {
+                leftMargin = dp(12)
+                bottomMargin = dp(14)
+                gravity = Gravity.BOTTOM or Gravity.START
+            }
+        )
+
         return panel
     }
 
@@ -190,57 +263,107 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            setBackgroundColor(BG)
         }
-        val row = LinearLayout(this).apply {
+
+        panel.addView(TextView(this).apply {
+            text = "無関係な言葉"
+            textSize = 22f
+            setTextColor(TEXT)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        })
+
+        panel.addView(TextView(this).apply {
+            text = "基準語あり：意味的に無関係な語 / 空欄：完全ランダム"
+            textSize = 12f
+            setTextColor(SUBTLE)
+            setPadding(0, dp(4), 0, dp(12))
+        })
+
+        val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(12), dp(8), dp(12), dp(4))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = rounded(Color.WHITE, 18f, STROKE)
+            elevation = dpF(5f)
         }
+
         randomInput = EditText(this).apply {
-            hint = "基準語（空欄なら完全ランダム）"
+            hint = "基準語（空欄でもOK）"
             isSingleLine = true
+            textSize = 15f
+            setTextColor(TEXT)
+            setHintTextColor(SUBTLE)
+            setPadding(dp(12), 0, dp(12), 0)
+            background = rounded(FIELD, 12f)
         }
+
         randomCountInput = EditText(this).apply {
             setText("20")
             inputType = InputType.TYPE_CLASS_NUMBER
             gravity = Gravity.CENTER
+            textSize = 14f
+            setTextColor(TEXT)
+            background = rounded(FIELD, 12f)
         }
-        val button = Button(this).apply {
-            text = "生成"
-            isAllCaps = false
-            setOnClickListener { generateRandom() }
-        }
-        row.addView(randomInput, LinearLayout.LayoutParams(0, dp(50), 1f))
-        row.addView(randomCountInput, LinearLayout.LayoutParams(dp(68), dp(50)))
-        row.addView(button, LinearLayout.LayoutParams(dp(74), dp(50)))
-        panel.addView(row)
 
-        val help = TextView(this).apply {
-            text = "入力あり: コサイン類似度が0付近の語をサンプリング。入力なし: 語彙全体からランダム。"
-            setPadding(dp(14), 0, dp(14), dp(8))
-            textSize = 12f
-            setTextColor(Color.DKGRAY)
-        }
-        panel.addView(help)
+        card.addView(randomInput, LinearLayout.LayoutParams(0, dp(48), 1f))
+        card.addView(randomCountInput, LinearLayout.LayoutParams(dp(62), dp(48)).apply {
+            marginStart = dp(8)
+        })
+        card.addView(primaryButton("生成") { generateRandom() }, LinearLayout.LayoutParams(dp(72), dp(48)).apply {
+            marginStart = dp(8)
+        })
+        panel.addView(card)
 
         randomResults = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(4), dp(12), dp(20))
+            setPadding(0, dp(12), 0, dp(20))
         }
-        val scroll = ScrollView(this).apply { addView(randomResults) }
-        panel.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        panel.addView(ScrollView(this).apply {
+            clipToPadding = false
+            addView(randomResults)
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
+
         return panel
     }
 
     private fun showTab(brainstorm: Boolean) {
         brainstormPanel.visibility = if (brainstorm) View.VISIBLE else View.GONE
         randomPanel.visibility = if (brainstorm) View.GONE else View.VISIBLE
+
+        brainstormTab.background = rounded(if (brainstorm) Color.WHITE else Color.TRANSPARENT, 11f)
+        randomTab.background = rounded(if (!brainstorm) Color.WHITE else Color.TRANSPARENT, 11f)
+        brainstormTab.setTextColor(if (brainstorm) TEXT else SUBTLE)
+        randomTab.setTextColor(if (!brainstorm) TEXT else SUBTLE)
+    }
+
+    private fun showPartOfSpeechDialog() {
+        val categories = PosCategory.values()
+        val labels = categories.map { it.label }.toTypedArray()
+        val checked = categories.map { posState[it] == true }.toBooleanArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("生成する品詞")
+            .setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                posState[categories[which]] = isChecked
+            }
+            .setPositiveButton("完了") { _, _ ->
+                current?.posFilter = currentFilter()
+                updateFilterLabel()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
     }
 
     private fun createMap(rawSeed: String) {
         val seed = rawSeed.trim()
         if (seed.isEmpty()) return
+
         current?.let { persist(it) }
         val branches = branchInput.text.toString().toIntOrNull()?.coerceIn(1, 30) ?: 5
+
         val session = GraphSession(
             id = UUID.randomUUID().toString(),
             title = seed,
@@ -248,6 +371,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
             branchCount = branches,
             posFilter = currentFilter()
         )
+
         val root = GraphNode(
             id = "root",
             text = seed,
@@ -258,22 +382,25 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
             x = 0f,
             y = 0f
         )
+
         session.nodes[root.id] = root
         current = session
         graphView.setSession(session, resetCamera = true)
-        detailText.text = "「" + seed + "」から探索中…"
+        detailText.text = "「" + seed + "」から生成中…"
         expandNode(root)
     }
 
     private fun expandNode(node: GraphNode) {
         val session = current ?: return
         if (node.loading || node.expanded || session.nodes.size >= MAX_NODES) return
+
         node.loading = true
         activeExpansions++
         graphView.refreshSession()
 
         val filter = currentFilter()
         session.posFilter = filter
+
         worker.submit {
             val result = runCatching {
                 engine.generateChildren(
@@ -284,16 +411,22 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
                     filter
                 )
             }
+
             main.post {
                 node.loading = false
                 activeExpansions = (activeExpansions - 1).coerceAtLeast(0)
+
                 result.onSuccess { candidates ->
                     val existing = session.nodes.values.mapTo(HashSet()) { it.text }
-                    val unique = candidates.filter { it.text !in existing }
+                    val unique = candidates
+                        .filter { it.text !in existing }
                         .take((MAX_NODES - session.nodes.size).coerceAtLeast(0))
+
                     session.addChildren(node, unique)
                     graphView.refreshSession()
+                    requestLayout(session)
                     persist(session)
+                    ensureFrontierWatch()
                 }.onFailure {
                     node.expanded = true
                     graphView.refreshSession()
@@ -303,16 +436,51 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         }
     }
 
+    private fun requestLayout(session: GraphSession) {
+        if (layoutRunning) {
+            layoutQueued = true
+            return
+        }
+
+        layoutRunning = true
+        val snapshot = session.nodes.values.map { it.copy() }
+
+        worker.submit {
+            val positions = ForceGraphLayout.relax(snapshot)
+            main.post {
+                if (current?.id == session.id) {
+                    positions.forEach { (id, position) ->
+                        session.nodes[id]?.let { node ->
+                            node.x = position.x
+                            node.y = position.y
+                        }
+                    }
+                    session.layoutVersion = 2
+                    graphView.refreshSession()
+                    persist(session)
+                }
+
+                layoutRunning = false
+                if (layoutQueued) {
+                    layoutQueued = false
+                    current?.let { requestLayout(it) }
+                }
+            }
+        }
+    }
+
     override fun onNodeSelected(nodeId: String) {
-        val n = current?.nodes?.get(nodeId) ?: return
-        detailText.text = n.text + "   ルートからの意味距離 " +
-            String.format("%.3f", n.semanticDistance) + "   深さ " + n.depth
+        val node = current?.nodes?.get(nodeId) ?: return
+        detailText.text = node.text +
+            "   意味距離 " + String.format("%.3f", node.semanticDistance) +
+            "   深さ " + node.depth
     }
 
     override fun onNodeLongPressed(nodeId: String) {
         val session = current ?: return
         val node = session.nodes[nodeId] ?: return
-        val starLabel = if (node.starred) "☆を外す" else "☆ この地点を保存"
+        val starLabel = if (node.starred) "☆ 保存を解除" else "☆ この地点を保存"
+
         AlertDialog.Builder(this)
             .setTitle(node.text)
             .setItems(arrayOf(starLabel, "◎ 新しい中心にする")) { _, which ->
@@ -339,58 +507,53 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         dirX: Float,
         dirY: Float
     ) {
-        val now = System.currentTimeMillis()
-        if (now - lastAutoAt < 220L || activeExpansions >= 2) return
-        val session = current ?: return
-        if (session.nodes.size >= MAX_NODES) return
-        val dirLen = hypot(dirX, dirY)
-        if (dirLen < 4f) return
-        val ux = dirX / dirLen
-        val uy = dirY / dirLen
-        val candidate = visibleNodeIds
-            .asSequence()
-            .mapNotNull { session.nodes[it] }
-            .filter { !it.expanded && !it.loading && it.parentId != null }
-            .map { n ->
-                val vx = n.x - centerX
-                val vy = n.y - centerY
-                n to (vx * ux + vy * uy)
-            }
-            .filter { it.second > 20f }
-            .maxByOrNull { it.second }
-            ?.first ?: return
-        lastAutoAt = now
-        expandNode(candidate)
+        if (hypot(dirX, dirY) > 0.8f || dirX == 0f && dirY == 0f) {
+            lastViewportActivityAt = System.currentTimeMillis()
+            ensureFrontierWatch()
+        }
+    }
+
+    private fun ensureFrontierWatch() {
+        if (frontierWatchPosted) return
+        frontierWatchPosted = true
+        main.postDelayed(frontierWatch, 120L)
     }
 
     private fun generateRandom() {
         val count = randomCountInput.text.toString().toIntOrNull()?.coerceIn(1, 1000) ?: 20
         val seed = randomInput.text.toString().trim().ifBlank { null }
+
         randomResults.removeAllViews()
-        val progress = ProgressBar(this)
-        randomResults.addView(progress)
+        randomResults.addView(ProgressBar(this))
+
         worker.submit {
             val result = runCatching { engine.randomWords(seed, count, currentFilter()) }
             main.post {
                 randomResults.removeAllViews()
                 result.onSuccess { words ->
-                    words.forEachIndexed { index, word ->
+                    words.forEach { word ->
                         val row = TextView(this).apply {
-                            text = (index + 1).toString() + ".  " + word
-                            textSize = 17f
-                            setTextColor(Color.rgb(45, 45, 52))
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
-                            setBackgroundColor(if (index % 2 == 0) Color.WHITE else Color.rgb(247, 247, 248))
+                            text = word
+                            textSize = 16f
+                            setTextColor(TEXT)
+                            gravity = Gravity.CENTER_VERTICAL
+                            setPadding(dp(16), dp(14), dp(16), dp(14))
+                            background = rounded(Color.WHITE, 14f, STROKE)
                             setOnClickListener {
                                 showTab(true)
                                 seedInput.setText(word)
                                 createMap(word)
                             }
                         }
-                        randomResults.addView(row, LinearLayout.LayoutParams(-1, -2))
+                        randomResults.addView(row, LinearLayout.LayoutParams(-1, -2).apply {
+                            bottomMargin = dp(8)
+                        })
                     }
                 }.onFailure {
-                    randomResults.addView(TextView(this).apply { text = "生成失敗: " + it.message })
+                    randomResults.addView(TextView(this).apply {
+                        text = "生成失敗: " + it.message
+                        setTextColor(TEXT)
+                    })
                 }
             }
         }
@@ -399,14 +562,18 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private fun showHistory() {
         current?.let { persist(it) }
         val sessions = store.loadAll()
+
         if (sessions.isEmpty()) {
             Toast.makeText(this, "履歴はまだありません", Toast.LENGTH_SHORT).show()
             return
         }
-        val labels = sessions.map { s ->
-            val stars = s.nodes.values.count { it.starred }
-            (if (stars > 0) "☆ " else "") + s.title + "   (" + s.nodes.size + " nodes)"
+
+        val labels = sessions.map { session ->
+            val stars = session.nodes.values.count { it.starred }
+            (if (stars > 0) "★ " else "") +
+                session.title + "   " + session.nodes.size + " nodes"
         }.toTypedArray()
+
         AlertDialog.Builder(this)
             .setTitle("履歴 / 保存地点")
             .setItems(labels) { _, which -> loadSession(sessions[which]) }
@@ -417,11 +584,17 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         current = session
         seedInput.setText(session.rootText)
         branchInput.setText(session.branchCount.toString())
-        posChecks.forEach { (category, check) -> check.isChecked = category in session.posFilter.enabled }
+
+        PosCategory.values().forEach { posState[it] = it in session.posFilter.enabled }
+        updateFilterLabel()
         graphView.setSession(session, resetCamera = true)
+
+        if (session.layoutVersion < 2) requestLayout(session)
+
         session.nodes.values.firstOrNull { it.starred }?.let {
-            detailText.text = "☆ " + it.text + " が保存されています"
+            detailText.text = "★ " + it.text + " が保存されています"
         }
+
         showTab(true)
     }
 
@@ -432,14 +605,21 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     }
 
     private fun currentFilter(): PosFilter {
-        val enabled = posChecks.filterValues { it.isChecked }.keys.toSet()
+        val enabled = posState.filterValues { it }.keys.toSet()
         return PosFilter(if (enabled.isEmpty()) setOf(PosCategory.NOUN) else enabled)
+    }
+
+    private fun updateFilterLabel() {
+        if (!::filterButton.isInitialized) return
+        val count = posState.count { it.value }
+        filterButton.text = "品詞  " + count + "/" + PosCategory.values().size
     }
 
     private fun refreshEngine() {
         runCatching { engine.close() }
         engine = if (modelPack.isInstalled()) {
-            runCatching { UsearchSemanticEngine(modelPack.modelDir) }.getOrElse { DemoSemanticEngine() }
+            runCatching { UsearchSemanticEngine(modelPack.modelDir) }
+                .getOrElse { DemoSemanticEngine() }
         } else {
             DemoSemanticEngine()
         }
@@ -447,7 +627,8 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     }
 
     private fun updateEngineLabel() {
-        engineText.text = engine.label + if (modelPack.isInstalled()) "" else "（モデル未導入）"
+        engineText.text = if (modelPack.isInstalled()) "2M語 • local" else "demo model"
+        updateFilterLabel()
     }
 
     private fun showModelMenu() {
@@ -455,10 +636,12 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         AlertDialog.Builder(this)
             .setTitle("日本語モデル")
             .setMessage(
-                if (installed) "フル語彙のローカル検索パックを使用中です。"
-                else "現在はUI確認用デモ辞書です。model-v1 Releaseからフル語彙パックをダウンロードできます。"
+                if (installed) "200万語のローカルモデルを使用中です。"
+                else "現在はデモ辞書です。フル日本語モデルをダウンロードできます。"
             )
-            .setPositiveButton(if (installed) "再ダウンロード" else "ダウンロード") { _, _ -> downloadModel() }
+            .setPositiveButton(if (installed) "再ダウンロード" else "ダウンロード") { _, _ ->
+                downloadModel()
+            }
             .setNegativeButton("閉じる", null)
             .show()
     }
@@ -468,12 +651,15 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(18), dp(24), dp(18))
         }
+
         val text = TextView(this).apply { this.text = "0%" }
         val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
         }
+
         dialogView.addView(text)
         dialogView.addView(bar, LinearLayout.LayoutParams(-1, dp(28)))
+
         val dialog = AlertDialog.Builder(this)
             .setTitle("モデルをダウンロード")
             .setView(dialogView)
@@ -483,10 +669,14 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
         worker.submit {
             val result = runCatching {
-                modelPack.downloadAndInstall { p ->
-                    main.post { bar.progress = p; text.text = p.toString() + "%" }
+                modelPack.downloadAndInstall { progress ->
+                    main.post {
+                        bar.progress = progress
+                        text.text = progress.toString() + "%"
+                    }
                 }
             }
+
             main.post {
                 dialog.dismiss()
                 result.onSuccess {
@@ -499,6 +689,65 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         }
     }
 
+    private fun compactTab(label: String, action: () -> Unit): TextView =
+        TextView(this).apply {
+            text = label
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setPadding(dp(13), 0, dp(13), 0)
+            setOnClickListener { action() }
+        }
+
+    private fun iconButton(label: String, action: () -> Unit): TextView =
+        TextView(this).apply {
+            text = label
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setTextColor(TEXT)
+            background = rounded(Color.TRANSPARENT, 12f)
+            setOnClickListener { action() }
+        }
+
+    private fun primaryButton(label: String, action: () -> Unit): TextView =
+        TextView(this).apply {
+            text = label
+            textSize = 14f
+            gravity = Gravity.CENTER
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = rounded(ACCENT, 12f)
+            setOnClickListener { action() }
+        }
+
+    private fun secondaryButton(label: String, action: () -> Unit): TextView =
+        TextView(this).apply {
+            text = label
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(78, 82, 92))
+            setPadding(dp(12), 0, dp(12), 0)
+            background = rounded(FIELD, 11f)
+            setOnClickListener { action() }
+        }
+
+    private fun solid(color: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(color)
+        }
+
+    private fun rounded(
+        color: Int,
+        radiusDp: Float,
+        strokeColor: Int? = null
+    ): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dpF(radiusDp)
+            setColor(color)
+            strokeColor?.let { setStroke(dp(1), it) }
+        }
+
     override fun onPause() {
         super.onPause()
         current?.let { persist(it) }
@@ -506,13 +755,27 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
     override fun onDestroy() {
         super.onDestroy()
+        main.removeCallbacks(frontierWatch)
         worker.shutdownNow()
         runCatching { engine.close() }
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
+
+    private fun dpF(value: Float): Float =
+        value * resources.displayMetrics.density
 
     companion object {
         private const val MAX_NODES = 5000
+        private const val FRONTIER_ACTIVE_MS = 1900L
+
+        private val BG = Color.rgb(247, 248, 251)
+        private val FIELD = Color.rgb(244, 245, 248)
+        private val MUTED = Color.rgb(239, 241, 245)
+        private val STROKE = Color.rgb(224, 227, 234)
+        private val TEXT = Color.rgb(28, 31, 38)
+        private val SUBTLE = Color.rgb(124, 131, 144)
+        private val ACCENT = Color.rgb(79, 70, 229)
     }
 }
