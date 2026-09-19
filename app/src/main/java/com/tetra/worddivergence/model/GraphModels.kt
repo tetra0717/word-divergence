@@ -105,7 +105,7 @@ data class GraphSession(
 
         candidates.forEachIndexed { index, candidate ->
             val childRadius = nodeRadiusWorld(candidate.text)
-            val linkLength = parent.visualRadius() + childRadius + 92f
+            val linkLength = parent.visualRadius() + childRadius + 125f
             val angle = if (parent.parentId == null) {
                 2f * PI.toFloat() * index / count
             } else {
