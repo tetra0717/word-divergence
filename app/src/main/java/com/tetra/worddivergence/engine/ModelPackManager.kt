@@ -65,7 +65,8 @@ class ModelPackManager(private val context: Context) {
                 var written = 0L
 
                 try {
-                    openReleaseAsset(part.name).use { connection ->
+                    val connection = openReleaseAsset(part.name)
+                    try {
                         connection.inputStream.buffered(1024 * 256).use { input ->
                             val buffer = ByteArray(1024 * 256)
                             while (true) {
@@ -83,6 +84,8 @@ class ModelPackManager(private val context: Context) {
                                 )
                             }
                         }
+                    } finally {
+                        connection.disconnect()
                     }
 
                     check(written == part.size) {
@@ -160,8 +163,11 @@ class ModelPackManager(private val context: Context) {
     }
 
     private fun fetchManifest(): Manifest {
-        val text = openUrl(MANIFEST_URL).use { connection ->
+        val connection = openUrl(MANIFEST_URL)
+        val text = try {
             connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } finally {
+            connection.disconnect()
         }
         val json = JSONObject(text)
         check(json.optInt("format", -1) == 1) { "unsupported model manifest format" }
@@ -217,7 +223,7 @@ class ModelPackManager(private val context: Context) {
     }
 
     private fun hex(bytes: ByteArray): String =
-        bytes.joinToString(separator = "") { "%02x".format(it) }
+        bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xff) }
 
     companion object {
         private const val RELEASE_BASE =
