@@ -107,6 +107,9 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
 static common_sampler *new_sampler(float temp) {
     common_params_sampling sparams;
     sparams.temp = temp;
+    sparams.top_k = 20;
+    sparams.top_p = 0.80f;
+    sparams.min_p = 0.0f;
     return common_sampler_init(g_model, sparams);
 }
 
