@@ -1,0 +1,108 @@
+name: Build Japanese model pack
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/model-pack.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: model-pack-v1
+  cancel-in-progress: false
+
+jobs:
+  build-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      FASTTEXT_URL: https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.ja.300.vec.gz
+      FASTTEXT_FILE: cc.ja.300.vec.gz
+      MODEL_OUT: model-pack
+      RELEASE_OUT: release-assets
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Install model builder
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Smoke test model builder
+        run: |
+          python - <<'PY'
+          import numpy as np
+          rng = np.random.default_rng(7)
+          with open("tiny.vec", "w", encoding="utf-8") as f:
+              f.write("128 300\n")
+              for i in range(128):
+                  v = rng.normal(size=300).astype(np.float32)
+                  f.write("word_%d %s\n" % (i, " ".join(map(str, v))))
+          PY
+          python scripts/build_model_pack.py --vec tiny.vec --out smoke-model --no-pos
+          python scripts/split_release_pack.py             --input smoke-model/ja-fasttext-usearch-pack.zip             --out smoke-release             --part-mib 1
+          python - <<'PY'
+          import json
+          m = json.load(open("smoke-release/model-manifest.json", encoding="utf-8"))
+          assert m["format"] == 1
+          assert m["archive_size"] > 0
+          assert len(m["parts"]) >= 1
+          print("smoke manifest parts:", len(m["parts"]))
+          PY
+          rm -rf tiny.vec smoke-model smoke-release
+
+      - name: Download official Japanese fastText vectors
+        run: |
+          curl -fL             --retry 8             --retry-delay 5             --retry-all-errors             --continue-at -             --output "${FASTTEXT_FILE}"             "${FASTTEXT_URL}"
+          ls -lh "${FASTTEXT_FILE}"
+          df -h /
+
+      - name: Build full-vocabulary HNSW pack
+        run: |
+          python scripts/build_model_pack.py             --vec "${FASTTEXT_FILE}"             --source-name cc.ja.300.vec.gz             --out "${MODEL_OUT}"
+          ls -lh "${MODEL_OUT}"
+          df -h /
+
+      - name: Split release assets
+        run: |
+          python scripts/split_release_pack.py             --input "${MODEL_OUT}/ja-fasttext-usearch-pack.zip"             --out "${RELEASE_OUT}"             --part-mib 1800
+          cp "${MODEL_OUT}/metadata.json" "${RELEASE_OUT}/metadata.json"
+          cp "${MODEL_OUT}/ATTRIBUTION.txt" "${RELEASE_OUT}/ATTRIBUTION.txt"
+          ls -lh "${RELEASE_OUT}"
+
+      - name: Create or update model-v1 release
+        run: |
+          if ! gh release view model-v1 >/dev/null 2>&1; then
+            gh release create model-v1               --title "Japanese full-vocabulary model v1"               --notes-file docs/MODEL_RELEASE_NOTES.md
+          fi
+
+          gh release upload model-v1             "${RELEASE_OUT}/model-manifest.json"             "${RELEASE_OUT}/metadata.json"             "${RELEASE_OUT}/ATTRIBUTION.txt"             ${RELEASE_OUT}/ja-fasttext-usearch-pack.zip.part-*             --clobber
+
+      - name: Verify release manifest is reachable
+        run: |
+          curl -fL             "https://github.com/${GITHUB_REPOSITORY}/releases/download/model-v1/model-manifest.json"             -o published-manifest.json
+          python - <<'PY'
+          import json
+          m = json.load(open("published-manifest.json", encoding="utf-8"))
+          print("published parts:", len(m["parts"]))
+          print("archive bytes:", m["archive_size"])
+          print("archive sha256:", m["archive_sha256"])
+          PY
