@@ -56,7 +56,7 @@ data class GraphSession(
     var title: String,
     val rootText: String,
     val branchCount: Int,
-    val posFilter: PosFilter,
+    var posFilter: PosFilter,
     val nodes: LinkedHashMap<String, GraphNode> = linkedMapOf(),
     val camera: CameraState = CameraState(),
     var createdAt: Long = System.currentTimeMillis(),
@@ -72,7 +72,7 @@ data class GraphSession(
         }
         val count = candidates.size
         val baseAngle = if (parent.parentId == null) 0f else parent.angle
-        val spread = if (parent.parentId == null) (2f * PI.toFloat()) else (PI.toFloat() * 0.78f)
+        val rootSector = (2f * PI.toFloat()) / branchCount.coerceAtLeast(1)\n        val spread = if (parent.parentId == null) (2f * PI.toFloat()) else (rootSector * 0.82f / kotlin.math.sqrt(parent.depth.coerceAtLeast(1).toFloat()))
         val out = ArrayList<GraphNode>(count)
         candidates.forEachIndexed { index, c ->
             val angle = if (parent.parentId == null) {
