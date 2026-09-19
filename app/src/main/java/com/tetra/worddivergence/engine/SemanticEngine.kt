@@ -10,6 +10,7 @@ interface SemanticEngine : AutoCloseable {
         parentText: String,
         parentDistance: Float,
         count: Int,
+        minSimilarity: Float,
         filter: PosFilter
     ): List<Candidate>
 
