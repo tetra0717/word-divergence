@@ -45,7 +45,7 @@ Force Layoutを途中で止めて既存ノードを固定する方式ではあ�
 
 - 300 dimensions
 - cosine
-- int8 scalar storage
+- float16 scalar storage
 - HNSW
 - disk-backed / memory-mapped index
 - SQLiteで word / vector id / POS を管理
