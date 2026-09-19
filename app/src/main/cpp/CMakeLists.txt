@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(word_divergence_native LANGUAGES C CXX)
+
+include(FetchContent)
+
+set(USEARCH_BUILD_TEST_CPP OFF CACHE BOOL "" FORCE)
+set(USEARCH_BUILD_BENCH_CPP OFF CACHE BOOL "" FORCE)
+set(USEARCH_BUILD_LIB_C OFF CACHE BOOL "" FORCE)
+set(USEARCH_BUILD_TEST_C OFF CACHE BOOL "" FORCE)
+set(USEARCH_BUILD_JNI ON CACHE BOOL "" FORCE)
+set(USEARCH_USE_OPENMP OFF CACHE BOOL "" FORCE)
+set(USEARCH_USE_JEMALLOC OFF CACHE BOOL "" FORCE)
+set(USEARCH_USE_NUMKONG OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+    usearch
+    GIT_REPOSITORY https://github.com/unum-cloud/USearch.git
+    GIT_TAG v2.26.0
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(usearch)
