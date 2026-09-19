@@ -24,6 +24,31 @@ class UsearchSemanticEngine(modelDir: File) : SemanticEngine {
         "SELECT value FROM meta WHERE key='max_id' LIMIT 1", null
     ).use { c -> if (c.moveToFirst()) c.getString(0).toLong() else index.size() }
 
+    init {
+        validateModelIntegrity()
+    }
+
+    private fun validateModelIntegrity() {
+        check(index.dimensions() == 300L) {
+            "unexpected vector dimensions: " + index.dimensions()
+        }
+        check(index.size() == maxId) {
+            "index/word DB size mismatch: index=" + index.size() + " db=" + maxId
+        }
+        check(maxId > 0L) { "empty semantic index" }
+
+        val probeId = 1L
+        val probeVector = index.get(probeId)
+        check(probeVector.size == 300) {
+            "unexpected probe vector size: " + probeVector.size
+        }
+
+        val nearest = index.search(probeVector, 8)
+        check(nearest.contains(probeId)) {
+            "semantic index self-search failed; model pack may be incompatible"
+        }
+    }
+
     override fun generateChildren(
         rootText: String,
         parentText: String,
