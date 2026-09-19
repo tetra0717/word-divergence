@@ -24,6 +24,7 @@ class LlmSemanticEngine(
     override fun generateChildren(
         rootText: String,
         parentText: String,
+        path: List<String>,
         parentDistance: Float,
         count: Int,
         minSimilarity: Float,
@@ -36,7 +37,9 @@ class LlmSemanticEngine(
             appendLine("/no_think")
             appendLine("これは独立した1回のブレインストーミング要求です。以前の会話は無視してください。")
             appendLine("ルート概念: 「" + rootText + "」")
+            appendLine("これまでの連想経路: " + path.joinToString(" → "))
             appendLine("今回タップされた親ノード: 「" + parentText + "」")
+            appendLine("同じ語や、すでに経路に出た概念へ戻る候補は避けてください。")
             appendLine("この親ノードから、日本語話者が自然に1ステップで直接連想できる語句だけを最大" + maxCount + "件返してください。")
             appendLine("無理に件数を埋めないでください。少しでも関係が弱い、語の断片、固有名詞の一部分、文字列共起だけの候補、説明文は出さないでください。")
             appendLine("同義語ばかりにせず、場所・用途・構成・原因・結果・行為・対象など関係の種類を分散してください。")
