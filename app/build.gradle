@@ -11,8 +11,8 @@ android {
         applicationId = 'com.tetra.worddivergence'
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = '0.1.0'
+        versionCode = (project.findProperty('ciVersionCode') ?: '1').toInteger()
+        versionName = "0.1." + (project.findProperty('ciVersionCode') ?: '0')
 
         externalNativeBuild {
             cmake {
