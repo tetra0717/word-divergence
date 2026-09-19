@@ -114,6 +114,7 @@ internal class InferenceEngineImpl private constructor(
     override val state: StateFlow<InferenceEngine.State> = _state.asStateFlow()
 
     private var _readyForSystemPrompt = false
+    private var _systemPrompt: String? = null
     @Volatile
     private var _cancelGeneration = false
 
@@ -207,7 +208,26 @@ internal class InferenceEngineImpl private constructor(
                     }
                 }
             }
+            _systemPrompt = prompt
             Log.i(TAG, "System prompt processed! Awaiting user prompt...")
+            _state.value = InferenceEngine.State.ModelReady
+        }
+
+    override suspend fun resetConversation() =
+        withContext(llamaDispatcher) {
+            val prompt = _systemPrompt
+                ?: throw IllegalStateException("System prompt has not been set")
+            check(_state.value is InferenceEngine.State.ModelReady) {
+                "Cannot reset conversation in ${_state.value.javaClass.simpleName}"
+            }
+            _state.value = InferenceEngine.State.ProcessingSystemPrompt
+            processSystemPrompt(prompt).let { result ->
+                if (result != 0) {
+                    val error = RuntimeException("Failed to reset conversation: $result")
+                    _state.value = InferenceEngine.State.Error(error)
+                    throw error
+                }
+            }
             _state.value = InferenceEngine.State.ModelReady
         }
 
@@ -320,5 +340,8 @@ internal class InferenceEngineImpl private constructor(
             }
         }
         llamaScope.cancel()
+        synchronized(Companion) {
+            instance = null
+        }
     }
 }
