@@ -2,23 +2,6 @@ plugins {
     id 'com.android.application'
 }
 
-def usearchVersion = "2.26.2"
-def usearchJar = file("lib/usearch-${usearchVersion}.jar")
-
-tasks.register("downloadUSearchJar") {
-    outputs.file(usearchJar)
-    doLast {
-        if (!usearchJar.exists()) {
-            usearchJar.parentFile.mkdirs()
-            def url = new URI("https://github.com/unum-cloud/USearch/releases/download/v${usearchVersion}/usearch-${usearchVersion}.jar").toURL()
-            println("Downloading USearch ${usearchVersion} fat JAR...")
-            url.withInputStream { input ->
-                usearchJar.withOutputStream { output -> output << input }
-            }
-        }
-    }
-}
-
 android {
     namespace = 'com.tetra.worddivergence'
     compileSdk = 36
@@ -41,10 +24,6 @@ android {
     }
 }
 
-tasks.named("preBuild").configure {
-    dependsOn("downloadUSearchJar")
-}
-
 dependencies {
-    implementation files(usearchJar)
+    implementation 'cloud.unum:usearch:2.26.0'
 }
