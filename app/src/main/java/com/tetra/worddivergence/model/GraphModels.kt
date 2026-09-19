@@ -72,7 +72,8 @@ data class GraphSession(
         }
         val count = candidates.size
         val baseAngle = if (parent.parentId == null) 0f else parent.angle
-        val rootSector = (2f * PI.toFloat()) / branchCount.coerceAtLeast(1)\n        val spread = if (parent.parentId == null) (2f * PI.toFloat()) else (rootSector * 0.82f / kotlin.math.sqrt(parent.depth.coerceAtLeast(1).toFloat()))
+        val rootSector = (2f * PI.toFloat()) / branchCount.coerceAtLeast(1)
+        val spread = if (parent.parentId == null) (2f * PI.toFloat()) else (rootSector * 0.82f / kotlin.math.sqrt(parent.depth.coerceAtLeast(1).toFloat()))
         val out = ArrayList<GraphNode>(count)
         candidates.forEachIndexed { index, c ->
             val angle = if (parent.parentId == null) {
