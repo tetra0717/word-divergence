@@ -362,6 +362,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private fun createMap(rawSeed: String) {
         val seed = rawSeed.trim()
         if (seed.isEmpty()) return
+        if (!ensureSemanticEngineReady()) return
 
         current?.let { persist(it) }
         val branches = branchInput.text.toString().toIntOrNull()?.coerceIn(1, 30) ?: 5
@@ -522,6 +523,8 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     }
 
     private fun generateRandom() {
+        if (!ensureSemanticEngineReady()) return
+
         val count = randomCountInput.text.toString().toIntOrNull()?.coerceIn(1, 1000) ?: 20
         val seed = randomInput.text.toString().trim().ifBlank { null }
 
@@ -615,6 +618,30 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         if (!::filterButton.isInitialized) return
         val count = posState.count { it.value }
         filterButton.text = "品詞  " + count + "/" + PosCategory.values().size
+    }
+
+    private fun ensureSemanticEngineReady(): Boolean {
+        return when (engine) {
+            is UsearchSemanticEngine -> true
+
+            is DemoSemanticEngine -> {
+                AlertDialog.Builder(this)
+                    .setTitle("日本語モデルが必要です")
+                    .setMessage(
+                        "Brainstormは意味ベクトルを使うため、UI確認用デモ辞書では生成しません。\n" +
+                            "フル日本語モデルをダウンロードしてください。"
+                    )
+                    .setPositiveButton("ダウンロード") { _, _ -> downloadModel() }
+                    .setNegativeButton("キャンセル", null)
+                    .show()
+                false
+            }
+
+            else -> {
+                showModelMenu()
+                false
+            }
+        }
     }
 
     private fun refreshEngine() {
