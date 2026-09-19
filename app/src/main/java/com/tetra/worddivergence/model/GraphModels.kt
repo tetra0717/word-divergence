@@ -85,6 +85,7 @@ data class GraphNode(
     val depth: Int,
     val semanticDistance: Float,
     val parentSimilarity: Float,
+    val relation: String? = null,
     val angle: Float,
     var x: Float,
     var y: Float,
@@ -99,8 +100,9 @@ data class GraphNode(
 
 data class Candidate(
     val text: String,
-    val semanticDistance: Float,
-    val parentSimilarity: Float = 1f
+    val semanticDistance: Float = 0f,
+    val parentSimilarity: Float = 1f,
+    val relation: String? = null
 )
 
 data class CameraState(
@@ -162,6 +164,7 @@ data class GraphSession(
                 depth = parent.depth + 1,
                 semanticDistance = candidate.semanticDistance.coerceIn(0f, 2f),
                 parentSimilarity = candidate.parentSimilarity.coerceIn(-1f, 1f),
+                relation = candidate.relation,
                 angle = angle,
                 x = parent.x + cos(angle) * linkLength,
                 y = parent.y + sin(angle) * linkLength
@@ -201,6 +204,7 @@ data class GraphSession(
                     put("depth", n.depth)
                     put("semanticDistance", n.semanticDistance)
                     put("parentSimilarity", n.parentSimilarity)
+                    put("relation", n.relation)
                     put("angle", n.angle)
                     put("x", n.x)
                     put("y", n.y)
@@ -252,6 +256,7 @@ data class GraphSession(
                     depth = n.getInt("depth"),
                     semanticDistance = n.getDouble("semanticDistance").toFloat(),
                     parentSimilarity = n.optDouble("parentSimilarity", 1.0).toFloat(),
+                    relation = n.optString("relation", "").ifBlank { null },
                     angle = n.optDouble("angle", 0.0).toFloat(),
                     x = n.getDouble("x").toFloat(),
                     y = n.getDouble("y").toFloat(),
