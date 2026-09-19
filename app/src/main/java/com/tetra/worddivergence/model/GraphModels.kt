@@ -3,9 +3,9 @@ package com.tetra.worddivergence.model
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.PI
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 enum class PosCategory(val dbValue: String, val label: String) {
     NOUN("noun", "名詞"),
@@ -28,13 +28,7 @@ data class PosFilter(
             (dbValue == "unknown" && PosCategory.OTHER in enabled)
 }
 
-/**
- * Visual size in graph-world dp units.
- *
- * Short words stay compact and circular. Longer phrases get a larger circle
- * with wrapped text. The size is deterministic from the label, so layout and
- * hit-testing use exactly the same geometry.
- */
+/** Visual radius in graph-world dp units. */
 fun nodeRadiusWorld(text: String, isRoot: Boolean = false): Float {
     val length = text.codePointCount(0, text.length)
     val base = when {
@@ -56,8 +50,8 @@ data class GraphNode(
     val depth: Int,
     val semanticDistance: Float,
     val angle: Float,
-    val x: Float,
-    val y: Float,
+    var x: Float,
+    var y: Float,
     var loading: Boolean = false,
     var expanded: Boolean = false,
     var starred: Boolean = false
@@ -85,10 +79,15 @@ data class GraphSession(
     val nodes: LinkedHashMap<String, GraphNode> = linkedMapOf(),
     val camera: CameraState = CameraState(),
     var createdAt: Long = System.currentTimeMillis(),
-    var updatedAt: Long = System.currentTimeMillis()
+    var updatedAt: Long = System.currentTimeMillis(),
+    var layoutVersion: Int = 2
 ) {
     fun root(): GraphNode = nodes.values.first { it.parentId == null }
 
+    /**
+     * New nodes appear near their parent. Final positions are produced by the
+     * deterministic force-layout pass; semantic distance is not used as geometry.
+     */
     fun addChildren(parent: GraphNode, candidates: List<Candidate>): List<GraphNode> {
         if (candidates.isEmpty()) {
             parent.expanded = true
@@ -97,45 +96,34 @@ data class GraphSession(
         }
 
         val count = candidates.size
-        val baseAngle = if (parent.parentId == null) 0f else parent.angle
-        val rootSector = (2f * PI.toFloat()) / branchCount.coerceAtLeast(1)
-        val spread = if (parent.parentId == null) {
-            2f * PI.toFloat()
+        val outward = if (parent.parentId == null) {
+            0f
         } else {
-            rootSector * 0.88f / sqrt(parent.depth.coerceAtLeast(1).toFloat())
+            atan2(parent.y, parent.x)
         }
-
         val out = ArrayList<GraphNode>(count)
-        candidates.forEachIndexed { index, candidate ->
-            val normalized = candidate.semanticDistance.coerceIn(0.02f, 1.35f)
-            // Larger semantic canvas than the prototype. Radius remains monotonic
-            // with root semantic distance while providing room for readable nodes.
-            val semanticRadius = 90f + normalized * 1150f
 
-            val desiredAngle = if (parent.parentId == null) {
+        candidates.forEachIndexed { index, candidate ->
+            val childRadius = nodeRadiusWorld(candidate.text)
+            val linkLength = parent.visualRadius() + childRadius + 92f
+            val angle = if (parent.parentId == null) {
                 2f * PI.toFloat() * index / count
             } else {
                 val t = if (count == 1) 0f else index.toFloat() / (count - 1) - 0.5f
-                baseAngle + t * spread
+                val deterministicJitter =
+                    ((candidate.text.hashCode() and 0xffff) / 65535f - 0.5f) * 0.12f
+                outward + t * 1.35f + deterministicJitter
             }
-
-            val visualRadius = nodeRadiusWorld(candidate.text)
-            val placement = findOpenPlacement(
-                desiredAngle = desiredAngle,
-                semanticRadius = semanticRadius,
-                nodeRadius = visualRadius,
-                sectorSpan = if (parent.parentId == null) rootSector else spread
-            )
 
             val node = GraphNode(
                 id = parent.id + "." + index + "." + System.nanoTime(),
                 text = candidate.text,
                 parentId = parent.id,
                 depth = parent.depth + 1,
-                semanticDistance = normalized,
-                angle = placement.first,
-                x = cos(placement.first) * placement.second,
-                y = sin(placement.first) * placement.second
+                semanticDistance = candidate.semanticDistance.coerceIn(0f, 2f),
+                angle = angle,
+                x = parent.x + cos(angle) * linkLength,
+                y = parent.y + sin(angle) * linkLength
             )
             nodes[node.id] = node
             out += node
@@ -144,55 +132,8 @@ data class GraphSession(
         parent.expanded = true
         parent.loading = false
         updatedAt = System.currentTimeMillis()
+        layoutVersion = 2
         return out
-    }
-
-    /**
-     * Collision-free placement is deterministic and one-shot: old nodes never
-     * move after insertion. We search angle first, preserving semantic radius.
-     * Only if a ring is completely saturated do we add the minimum outward
-     * visual offset needed to fit; the semanticDistance value itself is unchanged.
-     */
-    private fun findOpenPlacement(
-        desiredAngle: Float,
-        semanticRadius: Float,
-        nodeRadius: Float,
-        sectorSpan: Float
-    ): Pair<Float, Float> {
-        val margin = 14f
-        val angularStep = (PI.toFloat() / 90f).coerceAtMost(sectorSpan / 18f)
-        val maxAngularSteps = 28
-        val radialSteps = floatArrayOf(0f, 18f, 36f, 56f, 80f, 108f, 140f)
-
-        for (radialOffset in radialSteps) {
-            val radius = semanticRadius + radialOffset
-            for (step in 0..maxAngularSteps) {
-                val signed = when {
-                    step == 0 -> 0
-                    step % 2 == 1 -> (step + 1) / 2
-                    else -> -(step / 2)
-                }
-                val angle = desiredAngle + signed * angularStep
-                val x = cos(angle) * radius
-                val y = sin(angle) * radius
-                if (isOpen(x, y, nodeRadius, margin)) return angle to radius
-            }
-        }
-
-        // Dense worst-case fallback: deterministic outward position instead of
-        // overlapping existing nodes or moving the whole graph.
-        val fallbackRadius = semanticRadius + 180f
-        return desiredAngle to fallbackRadius
-    }
-
-    private fun isOpen(x: Float, y: Float, radius: Float, margin: Float): Boolean {
-        for (other in nodes.values) {
-            val dx = other.x - x
-            val dy = other.y - y
-            val minDistance = other.visualRadius() + radius + margin
-            if (dx * dx + dy * dy < minDistance * minDistance) return false
-        }
-        return true
     }
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -202,6 +143,7 @@ data class GraphSession(
         put("branchCount", branchCount)
         put("createdAt", createdAt)
         put("updatedAt", updatedAt)
+        put("layoutVersion", layoutVersion)
         put("enabledPos", JSONArray(posFilter.enabled.map { it.name }))
         put("camera", JSONObject().apply {
             put("x", camera.centerX)
@@ -234,6 +176,7 @@ data class GraphSession(
             for (i in 0 until p.length()) {
                 runCatching { enabled += PosCategory.valueOf(p.getString(i)) }
             }
+
             val s = GraphSession(
                 id = o.getString("id"),
                 title = o.getString("title"),
@@ -243,14 +186,17 @@ data class GraphSession(
                     if (enabled.isEmpty()) setOf(PosCategory.NOUN) else enabled
                 ),
                 createdAt = o.optLong("createdAt", System.currentTimeMillis()),
-                updatedAt = o.optLong("updatedAt", System.currentTimeMillis())
+                updatedAt = o.optLong("updatedAt", System.currentTimeMillis()),
+                layoutVersion = o.optInt("layoutVersion", 1)
             )
+
             val cam = o.optJSONObject("camera")
             if (cam != null) {
                 s.camera.centerX = cam.optDouble("x", 0.0).toFloat()
                 s.camera.centerY = cam.optDouble("y", 0.0).toFloat()
-                s.camera.scale = cam.optDouble("scale", 1.0).toFloat()
+                s.camera.scale = cam.optDouble("scale", 0.86).toFloat()
             }
+
             val a = o.getJSONArray("nodes")
             for (i in 0 until a.length()) {
                 val n = a.getJSONObject(i)
@@ -261,7 +207,7 @@ data class GraphSession(
                     parentId = parentId,
                     depth = n.getInt("depth"),
                     semanticDistance = n.getDouble("semanticDistance").toFloat(),
-                    angle = n.getDouble("angle").toFloat(),
+                    angle = n.optDouble("angle", 0.0).toFloat(),
                     x = n.getDouble("x").toFloat(),
                     y = n.getDouble("y").toFloat(),
                     loading = false,
