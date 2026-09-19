@@ -390,6 +390,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
                 engine.generateChildren(
                     session.rootText,
                     node.text,
+                    buildPath(session, node),
                     node.semanticDistance,
                     session.branchCount,
                     0f,
@@ -418,6 +419,18 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
                 }
             }
         }
+    }
+
+    private fun buildPath(session: GraphSession, node: GraphNode): List<String> {
+        val reversed = ArrayList<String>()
+        var current: GraphNode? = node
+        var guard = 0
+        while (current != null && guard++ < 256) {
+            reversed += current.text
+            current = current.parentId?.let { session.nodes[it] }
+        }
+        reversed.reverse()
+        return reversed
     }
 
     private fun requestLayout(session: GraphSession) {
