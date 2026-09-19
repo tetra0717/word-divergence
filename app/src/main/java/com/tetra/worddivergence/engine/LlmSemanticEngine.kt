@@ -31,6 +31,7 @@ class LlmSemanticEngine(
     ): List<Candidate> = synchronized(lock) {
         ensureLoaded()
         val maxCount = count.coerceIn(1, 20)
+        val allowedPos = filter.enabled.joinToString("・") { it.label }
         val prompt = buildString {
             appendLine("/no_think")
             appendLine("これは独立した1回のブレインストーミング要求です。以前の会話は無視してください。")
@@ -40,6 +41,7 @@ class LlmSemanticEngine(
             appendLine("無理に件数を埋めないでください。少しでも関係が弱い、語の断片、固有名詞の一部分、文字列共起だけの候補、説明文は出さないでください。")
             appendLine("同義語ばかりにせず、場所・用途・構成・原因・結果・行為・対象など関係の種類を分散してください。")
             appendLine("候補は単独で意味が通る自然な日本語語句にしてください。")
+            appendLine("許可されている品詞カテゴリ: " + allowedPos + "。原則としてこの範囲だけを返してください。")
             appendLine("各候補について、親→候補の関係を短い日本語で relation に入れてください。")
             appendLine("出力前に各候補を内部で再検査し、不自然なものは削除してください。")
             appendLine("出力はJSON配列だけ。Markdownや説明は禁止。")
