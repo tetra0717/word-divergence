@@ -21,6 +21,7 @@ class DemoSemanticEngine : SemanticEngine {
         parentText: String,
         parentDistance: Float,
         count: Int,
+        minSimilarity: Float,
         filter: PosFilter
     ): List<Candidate> {
         val r = Random(rootText.hashCode() * 31 + parentText.hashCode())
@@ -35,7 +36,7 @@ class DemoSemanticEngine : SemanticEngine {
             }
             .sortedBy { abs(it.second - target) + r.nextFloat() * 0.08f }
             .take(count)
-            .map { Candidate(it.first, it.second) }
+            .map { Candidate(it.first, it.second, 1f) }
             .toList()
     }
 
