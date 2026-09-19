@@ -50,7 +50,7 @@ Force Layoutを途中で止めて既存ノードを固定する方式ではあ�
 - disk-backed / memory-mapped index
 - SQLiteで word / vector id / POS を管理
 
-USearch 2.26.2のfat JARにはAndroid用native buildが含まれるため、ビルド時にGitHub Releaseから自動取得します。
+USearch 2.26.0を固定し、Android NDK/CMakeで公式JNIソースを直接ビルドします。公開JARの有無に依存しません。
 
 モデルパックの作り方は docs/MODEL_PACK.md を参照してください。
 
@@ -67,7 +67,7 @@ Android Studioでリポジトリを開くか:
 ./gradlew assembleDebug
 ~~~
 
-最低AndroidバージョンはAndroid 10 (API 29)、target/compile SDKは37です。
+最低AndroidバージョンはAndroid 10 (API 29)、target/compile SDKは36です。
 
 ## Model pack
 
