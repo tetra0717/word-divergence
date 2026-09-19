@@ -1,5 +1,9 @@
 name: Android CI
 
+concurrency:
+  group: word-divergence-main-signing
+  cancel-in-progress: false
+
 on:
   push:
     branches: [ main ]
@@ -22,8 +26,15 @@ jobs:
       - name: Install Android SDK 36
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
 
+      - name: Restore stable debug signing key
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: word-divergence-debug-keystore-v1
+
       - name: Build debug APK
-        run: ./gradlew --no-daemon assembleDebug
+        run: ./gradlew --no-daemon -PciVersionCode=${{ github.run_number }} assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
