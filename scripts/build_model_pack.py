@@ -3,7 +3,7 @@
 
 Input: decompressed fastText .vec file (for example cc.ja.300.vec)
 Output:
-  vectors.usearch  - cosine HNSW, 300 dimensions, int8 storage
+  vectors.usearch  - cosine HNSW, 300 dimensions, float16 storage
   words.sqlite     - exact full vocabulary mapping + coarse POS
   metadata.json
   ja-fasttext-usearch-pack.zip
@@ -91,7 +91,7 @@ def main() -> int:
         index = Index(
             ndim=dims,
             metric="cos",
-            dtype="i8",
+            dtype="f16",
             connectivity=16,
             expansion_add=128,
             expansion_search=96,
@@ -170,7 +170,7 @@ def main() -> int:
         "indexed_count": actual_count,
         "dimensions": dims,
         "metric": "cos",
-        "quantization": "i8",
+        "quantization": "f16",
         "connectivity": 16,
         "expansion_add": 128,
         "expansion_search": 96,
