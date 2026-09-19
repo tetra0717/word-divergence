@@ -8,6 +8,7 @@ interface SemanticEngine : AutoCloseable {
     fun generateChildren(
         rootText: String,
         parentText: String,
+        path: List<String>,
         parentDistance: Float,
         count: Int,
         minSimilarity: Float,
