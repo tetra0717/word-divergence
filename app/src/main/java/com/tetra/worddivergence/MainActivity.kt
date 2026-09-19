@@ -23,6 +23,7 @@ import com.tetra.worddivergence.engine.DemoSemanticEngine
 import com.tetra.worddivergence.engine.ModelPackManager
 import com.tetra.worddivergence.engine.SemanticEngine
 import com.tetra.worddivergence.engine.UsearchSemanticEngine
+import com.tetra.worddivergence.engine.UnavailableSemanticEngine
 import com.tetra.worddivergence.graph.ForceGraphLayout
 import com.tetra.worddivergence.graph.SemanticGraphView
 import com.tetra.worddivergence.model.GraphNode
@@ -37,6 +38,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private lateinit var store: GraphStore
     private lateinit var modelPack: ModelPackManager
     private var engine: SemanticEngine = DemoSemanticEngine()
+    private var engineLoadError: String? = null
     private val worker = Executors.newFixedThreadPool(2)
     private val main = Handler(Looper.getMainLooper())
 
@@ -617,28 +619,63 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
     private fun refreshEngine() {
         runCatching { engine.close() }
+        engineLoadError = null
+
         engine = if (modelPack.isInstalled()) {
-            runCatching { UsearchSemanticEngine(modelPack.modelDir) }
-                .getOrElse { DemoSemanticEngine() }
+            runCatching {
+                UsearchSemanticEngine(modelPack.modelDir)
+            }.getOrElse { error ->
+                val detail = buildString {
+                    append(error.javaClass.simpleName)
+                    error.message?.takeIf { it.isNotBlank() }?.let {
+                        append(": ")
+                        append(it)
+                    }
+                }
+                engineLoadError = detail
+                UnavailableSemanticEngine(detail)
+            }
         } else {
             DemoSemanticEngine()
         }
+
         if (::engineText.isInitialized) updateEngineLabel()
     }
 
     private fun updateEngineLabel() {
-        engineText.text = if (modelPack.isInstalled()) "2M語 • local" else "demo model"
+        engineText.text = when (engine) {
+            is UsearchSemanticEngine -> "2M語 • local"
+            is DemoSemanticEngine -> "DEMO • 非意味検索"
+            else -> "MODEL ERROR"
+        }
+        engineText.setTextColor(
+            when (engine) {
+                is UsearchSemanticEngine -> SUBTLE
+                is DemoSemanticEngine -> Color.rgb(194, 120, 18)
+                else -> Color.rgb(190, 45, 45)
+            }
+        )
         updateFilterLabel()
     }
 
     private fun showModelMenu() {
         val installed = modelPack.isInstalled()
+        val message = when (engine) {
+            is UsearchSemanticEngine ->
+                "200万語のfastText + HNSWローカルモデルを使用中です。"
+
+            is DemoSemanticEngine ->
+                "フル日本語モデルは未導入です。\n現在のDEMOはUI確認用で、意味的な連想品質は保証しません。"
+
+            else ->
+                "モデルファイルはありますが、読み込みに失敗しています。\n" +
+                    (engineLoadError ?: "原因不明") +
+                    "\n\n再ダウンロードしてください。"
+        }
+
         AlertDialog.Builder(this)
             .setTitle("日本語モデル")
-            .setMessage(
-                if (installed) "200万語のローカルモデルを使用中です。"
-                else "現在はデモ辞書です。フル日本語モデルをダウンロードできます。"
-            )
+            .setMessage(message)
             .setPositiveButton(if (installed) "再ダウンロード" else "ダウンロード") { _, _ ->
                 downloadModel()
             }
