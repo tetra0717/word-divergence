@@ -29,18 +29,53 @@ data class PosFilter(
 }
 
 /** Visual radius in graph-world dp units. */
-fun nodeRadiusWorld(text: String, isRoot: Boolean = false): Float {
-    val length = text.codePointCount(0, text.length)
-    val base = when {
-        length <= 2 -> 30f
-        length <= 4 -> 34f
-        length <= 7 -> 40f
-        length <= 11 -> 48f
-        length <= 17 -> 57f
-        length <= 25 -> 66f
-        else -> 76f
+fun nodeLabelLines(text: String): List<String> {
+    val clean = text.trim()
+    if (clean.length <= 18) return listOf(clean)
+
+    val delimiters = charArrayOf('、', '。', '！', '？', '・', ' ', '／', '/', '，', ',', '：', ':', '；', ';')
+    val middle = clean.length / 2
+    var best = -1
+    var bestDistance = Int.MAX_VALUE
+    for (i in 1 until clean.length - 1) {
+        if (clean[i] in delimiters) {
+            val distance = kotlin.math.abs(i - middle)
+            if (distance < bestDistance) {
+                best = i
+                bestDistance = distance
+            }
+        }
     }
-    return base + if (isRoot) 5f else 0f
+    if (best < 0) return listOf(clean)
+
+    val left = clean.substring(0, best + 1).trim()
+    val right = clean.substring(best + 1).trim()
+    return if (left.isNotEmpty() && right.isNotEmpty()) listOf(left, right) else listOf(clean)
+}
+
+private fun estimatedTextWidthDp(text: String): Float {
+    var width = 0f
+    text.forEach { ch ->
+        width += if (ch.code in 0x20..0x7e) 7.2f else 12.8f
+    }
+    return width
+}
+
+fun nodeWidthWorld(text: String, isRoot: Boolean = false): Float {
+    val lineWidth = nodeLabelLines(text).maxOfOrNull { estimatedTextWidthDp(it) } ?: 0f
+    return (lineWidth + if (isRoot) 30f else 24f).coerceAtLeast(if (isRoot) 62f else 48f)
+}
+
+fun nodeHeightWorld(text: String, isRoot: Boolean = false): Float {
+    val lines = nodeLabelLines(text).size
+    val base = if (lines == 1) 34f else 52f
+    return base + if (isRoot) 4f else 0f
+}
+
+fun nodeCollisionRadiusWorld(text: String, isRoot: Boolean = false): Float {
+    val halfW = nodeWidthWorld(text, isRoot) / 2f
+    val halfH = nodeHeightWorld(text, isRoot) / 2f
+    return kotlin.math.sqrt(halfW * halfW + halfH * halfH)
 }
 
 data class GraphNode(
@@ -49,6 +84,7 @@ data class GraphNode(
     val parentId: String?,
     val depth: Int,
     val semanticDistance: Float,
+    val parentSimilarity: Float,
     val angle: Float,
     var x: Float,
     var y: Float,
@@ -56,12 +92,15 @@ data class GraphNode(
     var expanded: Boolean = false,
     var starred: Boolean = false
 ) {
-    fun visualRadius(): Float = nodeRadiusWorld(text, parentId == null)
+    fun visualWidth(): Float = nodeWidthWorld(text, parentId == null)
+    fun visualHeight(): Float = nodeHeightWorld(text, parentId == null)
+    fun collisionRadius(): Float = nodeCollisionRadiusWorld(text, parentId == null)
 }
 
 data class Candidate(
     val text: String,
-    val semanticDistance: Float
+    val semanticDistance: Float,
+    val parentSimilarity: Float = 1f
 )
 
 data class CameraState(
@@ -75,6 +114,7 @@ data class GraphSession(
     var title: String,
     val rootText: String,
     val branchCount: Int,
+    val minSimilarity: Float = 0.45f,
     var posFilter: PosFilter,
     val nodes: LinkedHashMap<String, GraphNode> = linkedMapOf(),
     val camera: CameraState = CameraState(),
@@ -104,8 +144,8 @@ data class GraphSession(
         val out = ArrayList<GraphNode>(count)
 
         candidates.forEachIndexed { index, candidate ->
-            val childRadius = nodeRadiusWorld(candidate.text)
-            val linkLength = parent.visualRadius() + childRadius + 125f
+            val childRadius = nodeCollisionRadiusWorld(candidate.text)
+            val linkLength = parent.collisionRadius() + childRadius + 92f
             val angle = if (parent.parentId == null) {
                 2f * PI.toFloat() * index / count
             } else {
@@ -121,6 +161,7 @@ data class GraphSession(
                 parentId = parent.id,
                 depth = parent.depth + 1,
                 semanticDistance = candidate.semanticDistance.coerceIn(0f, 2f),
+                parentSimilarity = candidate.parentSimilarity.coerceIn(-1f, 1f),
                 angle = angle,
                 x = parent.x + cos(angle) * linkLength,
                 y = parent.y + sin(angle) * linkLength
@@ -141,6 +182,7 @@ data class GraphSession(
         put("title", title)
         put("rootText", rootText)
         put("branchCount", branchCount)
+        put("minSimilarity", minSimilarity)
         put("createdAt", createdAt)
         put("updatedAt", updatedAt)
         put("layoutVersion", layoutVersion)
@@ -158,6 +200,7 @@ data class GraphSession(
                     put("parentId", n.parentId)
                     put("depth", n.depth)
                     put("semanticDistance", n.semanticDistance)
+                    put("parentSimilarity", n.parentSimilarity)
                     put("angle", n.angle)
                     put("x", n.x)
                     put("y", n.y)
@@ -182,6 +225,7 @@ data class GraphSession(
                 title = o.getString("title"),
                 rootText = o.getString("rootText"),
                 branchCount = o.getInt("branchCount"),
+                minSimilarity = o.optDouble("minSimilarity", 0.45).toFloat(),
                 posFilter = PosFilter(
                     if (enabled.isEmpty()) setOf(PosCategory.NOUN) else enabled
                 ),
@@ -207,6 +251,7 @@ data class GraphSession(
                     parentId = parentId,
                     depth = n.getInt("depth"),
                     semanticDistance = n.getDouble("semanticDistance").toFloat(),
+                    parentSimilarity = n.optDouble("parentSimilarity", 1.0).toFloat(),
                     angle = n.optDouble("angle", 0.0).toFloat(),
                     x = n.getDouble("x").toFloat(),
                     y = n.getDouble("y").toFloat(),
