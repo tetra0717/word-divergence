@@ -21,10 +21,9 @@ import android.widget.TextView
 import android.widget.Toast
 import com.tetra.worddivergence.data.GraphStore
 import com.tetra.worddivergence.engine.DemoSemanticEngine
-import com.tetra.worddivergence.engine.ModelPackManager
+import com.tetra.worddivergence.engine.LlmModelManager
 import com.tetra.worddivergence.engine.SemanticEngine
-import com.tetra.worddivergence.engine.UsearchSemanticEngine
-import com.tetra.worddivergence.engine.UnavailableSemanticEngine
+import com.tetra.worddivergence.engine.LlmSemanticEngine
 import com.tetra.worddivergence.graph.ForceGraphLayout
 import com.tetra.worddivergence.graph.SemanticGraphView
 import com.tetra.worddivergence.model.GraphNode
@@ -33,13 +32,11 @@ import com.tetra.worddivergence.model.PosCategory
 import com.tetra.worddivergence.model.PosFilter
 import java.util.UUID
 import java.util.concurrent.Executors
-import kotlin.math.hypot
 
 class MainActivity : Activity(), SemanticGraphView.Listener {
     private lateinit var store: GraphStore
-    private lateinit var modelPack: ModelPackManager
+    private lateinit var llmModel: LlmModelManager
     private var engine: SemanticEngine = DemoSemanticEngine()
-    private var engineLoadError: String? = null
     private val worker = Executors.newFixedThreadPool(2)
     private val main = Handler(Looper.getMainLooper())
 
@@ -48,7 +45,6 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private lateinit var randomPanel: LinearLayout
     private lateinit var seedInput: EditText
     private lateinit var branchInput: EditText
-    private lateinit var similarityInput: EditText
     private lateinit var detailText: TextView
     private lateinit var engineText: TextView
     private lateinit var randomInput: EditText
@@ -63,37 +59,10 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private var activeExpansions = 0
     private var layoutRunning = false
     private var layoutQueued = false
-    private var lastViewportActivityAt = 0L
-    private var frontierWatchPosted = false
-
-    private val frontierWatch = object : Runnable {
-        override fun run() {
-            frontierWatchPosted = false
-            val now = System.currentTimeMillis()
-            if (now - lastViewportActivityAt > FRONTIER_ACTIVE_MS) return
-
-            val session = current ?: return
-            if (session.nodes.size >= MAX_NODES) return
-
-            if (activeExpansions < 2) {
-                val candidate = graphView.frontierNodeIds()
-                    .asSequence()
-                    .mapNotNull { session.nodes[it] }
-                    .filter { !it.expanded && !it.loading && it.parentId != null }
-                    .maxByOrNull { graphView.distanceFromViewportCenter(it) }
-
-                if (candidate != null) expandNode(candidate)
-            }
-
-            frontierWatchPosted = true
-            main.postDelayed(this, 280L)
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = GraphStore(this)
-        modelPack = ModelPackManager(this)
+        llmModel = LlmModelManager(this)
 
         PosCategory.values().forEach {
             posState[it] = it in setOf(
@@ -213,26 +182,13 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
             hint = "上限"
         }
 
-        similarityInput = EditText(this).apply {
-            setText("0.45")
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            gravity = Gravity.CENTER
-            textSize = 13f
-            setTextColor(TEXT)
-            background = rounded(FIELD, 12f)
-            hint = "類似度"
-        }
-
         val generate = primaryButton("生成") { createMap(seedInput.text.toString()) }
 
         inputRow.addView(seedInput, LinearLayout.LayoutParams(0, dp(48), 1f))
-        inputRow.addView(branchInput, LinearLayout.LayoutParams(dp(56), dp(48)).apply {
+        inputRow.addView(branchInput, LinearLayout.LayoutParams(dp(62), dp(48)).apply {
             marginStart = dp(8)
         })
-        inputRow.addView(similarityInput, LinearLayout.LayoutParams(dp(66), dp(48)).apply {
-            marginStart = dp(8)
-        })
-        inputRow.addView(generate, LinearLayout.LayoutParams(dp(68), dp(48)).apply {
+        inputRow.addView(generate, LinearLayout.LayoutParams(dp(72), dp(48)).apply {
             marginStart = dp(8)
         })
         controls.addView(inputRow)
@@ -266,7 +222,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         )
 
         detailText = TextView(this).apply {
-            text = "タップで詳細・長押しで保存 / 新しい中心"
+            text = "ノードをタップして連想を展開・長押しで保存 / 新しい中心"
             textSize = 12f
             setTextColor(Color.rgb(71, 76, 87))
             setPadding(dp(13), dp(9), dp(13), dp(9))
@@ -390,19 +346,13 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         if (!ensureSemanticEngineReady()) return
 
         current?.let { persist(it) }
-        val branches = branchInput.text.toString().toIntOrNull()?.coerceIn(1, 30) ?: 5
-        val minSimilarity = similarityInput.text.toString()
-            .toFloatOrNull()
-            ?.coerceIn(0f, 1f)
-            ?: 0.45f
-        similarityInput.setText(String.format("%.2f", minSimilarity))
+        val branches = branchInput.text.toString().toIntOrNull()?.coerceIn(1, 20) ?: 5
 
         val session = GraphSession(
             id = UUID.randomUUID().toString(),
             title = seed,
             rootText = seed,
             branchCount = branches,
-            minSimilarity = minSimilarity,
             posFilter = currentFilter()
         )
 
@@ -421,8 +371,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         session.nodes[root.id] = root
         current = session
         graphView.setSession(session, resetCamera = true)
-        detailText.text = "「" + seed + "」から生成中…"
-        expandNode(root)
+        detailText.text = "「" + seed + "」をタップすると連想を生成します"
     }
 
     private fun expandNode(node: GraphNode) {
@@ -443,7 +392,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
                     node.text,
                     node.semanticDistance,
                     session.branchCount,
-                    session.minSimilarity,
+                    0f,
                     filter
                 )
             }
@@ -462,7 +411,6 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
                     graphView.refreshSession()
                     requestLayout(session)
                     persist(session)
-                    ensureFrontierWatch()
                 }.onFailure {
                     node.expanded = true
                     graphView.refreshSession()
@@ -507,10 +455,12 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
     override fun onNodeSelected(nodeId: String) {
         val node = current?.nodes?.get(nodeId) ?: return
-        detailText.text = node.text +
-            "   親との関連度 " + String.format("%.3f", node.parentSimilarity) +
-            "   ルート距離 " + String.format("%.3f", node.semanticDistance) +
-            "   深さ " + node.depth
+        val relation = node.relation?.let { "   関係: " + it } ?: ""
+        detailText.text = node.text + relation + "   深さ " + node.depth
+
+        if (!node.expanded && !node.loading) {
+            expandNode(node)
+        }
     }
 
     override fun onNodeLongPressed(nodeId: String) {
@@ -544,16 +494,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         dirX: Float,
         dirY: Float
     ) {
-        if (hypot(dirX, dirY) > 0.8f || dirX == 0f && dirY == 0f) {
-            lastViewportActivityAt = System.currentTimeMillis()
-            ensureFrontierWatch()
-        }
-    }
-
-    private fun ensureFrontierWatch() {
-        if (frontierWatchPosted) return
-        frontierWatchPosted = true
-        main.postDelayed(frontierWatch, 120L)
+        // Expansion is intentionally tap-only. Panning/zooming never generates nodes.
     }
 
     private fun generateRandom() {
@@ -623,7 +564,6 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         current = session
         seedInput.setText(session.rootText)
         branchInput.setText(session.branchCount.toString())
-        similarityInput.setText(String.format("%.2f", session.minSimilarity))
 
         PosCategory.values().forEach { posState[it] = it in session.posFilter.enabled }
         updateFilterLabel()
@@ -657,14 +597,14 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
     private fun ensureSemanticEngineReady(): Boolean {
         return when (engine) {
-            is UsearchSemanticEngine -> true
+            is LlmSemanticEngine -> true
 
             is DemoSemanticEngine -> {
                 AlertDialog.Builder(this)
                     .setTitle("日本語モデルが必要です")
                     .setMessage(
-                        "Brainstormは意味ベクトルを使うため、UI確認用デモ辞書では生成しません。\n" +
-                            "フル日本語モデルをダウンロードしてください。"
+                        "Brainstormは端末内Qwenで生成します。\n" +
+                            "初回のみ約1.28GBのQwen3-1.7Bモデルをダウンロードしてください。"
                     )
                     .setPositiveButton("ダウンロード") { _, _ -> downloadModel() }
                     .setNegativeButton("キャンセル", null)
@@ -681,83 +621,46 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
     private fun refreshEngine() {
         runCatching { engine.close() }
-        engineLoadError = null
-
-        engine = if (modelPack.isInstalled()) {
-            runCatching {
-                UsearchSemanticEngine(modelPack.modelDir)
-            }.getOrElse { error ->
-                val detail = buildString {
-                    append(error.javaClass.simpleName)
-                    error.message?.takeIf { it.isNotBlank() }?.let {
-                        append(": ")
-                        append(it)
-                    }
-                }
-                engineLoadError = detail
-                UnavailableSemanticEngine(detail)
-            }
+        engine = if (llmModel.isInstalled()) {
+            LlmSemanticEngine(applicationContext, llmModel.modelFile)
         } else {
             DemoSemanticEngine()
         }
-
         if (::engineText.isInitialized) updateEngineLabel()
     }
 
     private fun updateEngineLabel() {
         engineText.text = when (engine) {
-            is UsearchSemanticEngine -> "2M語 • local"
-            is DemoSemanticEngine -> "DEMO • 非意味検索"
-            else -> "MODEL ERROR"
+            is LlmSemanticEngine -> "Qwen3 1.7B • local"
+            else -> "LLM未導入"
         }
         engineText.setTextColor(
-            when (engine) {
-                is UsearchSemanticEngine -> SUBTLE
-                is DemoSemanticEngine -> Color.rgb(194, 120, 18)
-                else -> Color.rgb(190, 45, 45)
-            }
+            if (engine is LlmSemanticEngine) SUBTLE else Color.rgb(194, 120, 18)
         )
         updateFilterLabel()
     }
 
     private fun showModelMenu() {
-        when (engine) {
-            is UsearchSemanticEngine -> {
-                AlertDialog.Builder(this)
-                    .setTitle("日本語モデル")
-                    .setMessage(
-                        "200万語のfastText + HNSWローカルモデルを使用中です。\n" +
-                            "アプリを更新しても、このモデルはそのまま保持されます。"
-                    )
-                    .setPositiveButton("閉じる", null)
-                    .setNeutralButton("モデルを再取得") { _, _ -> downloadModel() }
-                    .show()
-            }
-
-            is DemoSemanticEngine -> {
-                AlertDialog.Builder(this)
-                    .setTitle("日本語モデル")
-                    .setMessage(
-                        "フル日本語モデルは未導入です。\n" +
-                            "Brainstormを使うには初回のみダウンロードしてください。"
-                    )
-                    .setPositiveButton("ダウンロード") { _, _ -> downloadModel() }
-                    .setNegativeButton("閉じる", null)
-                    .show()
-            }
-
-            else -> {
-                AlertDialog.Builder(this)
-                    .setTitle("モデル読み込みエラー")
-                    .setMessage(
-                        "モデルファイルはありますが、読み込みに失敗しています。\n" +
-                            (engineLoadError ?: "原因不明") +
-                            "\n\nモデルを再取得してください。"
-                    )
-                    .setPositiveButton("モデルを再取得") { _, _ -> downloadModel() }
-                    .setNegativeButton("閉じる", null)
-                    .show()
-            }
+        if (llmModel.isInstalled()) {
+            AlertDialog.Builder(this)
+                .setTitle("ローカルLLM")
+                .setMessage(
+                    "Qwen3-1.7B Q4_K_M を端末内で使用します。\n" +
+                        "モデルはアプリ更新後も保持され、通常は再ダウンロード不要です。"
+                )
+                .setPositiveButton("閉じる", null)
+                .setNeutralButton("モデルを再取得") { _, _ -> downloadModel() }
+                .show()
+        } else {
+            AlertDialog.Builder(this)
+                .setTitle("ローカルLLM")
+                .setMessage(
+                    "Brainstorm用にQwen3-1.7B Q4_K_M（約1.28GB）を初回のみダウンロードします。\n" +
+                        "推論はダウンロード後すべて端末内で行います。"
+                )
+                .setPositiveButton("ダウンロード") { _, _ -> downloadModel() }
+                .setNegativeButton("閉じる", null)
+                .show()
         }
     }
 
@@ -776,7 +679,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         dialogView.addView(bar, LinearLayout.LayoutParams(-1, dp(28)))
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("モデルをダウンロード")
+.setTitle("Qwen3-1.7Bをダウンロード")
             .setView(dialogView)
             .setCancelable(false)
             .create()
@@ -784,7 +687,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
         worker.submit {
             val result = runCatching {
-                modelPack.downloadAndInstall { progress ->
+                llmModel.downloadAndInstall { progress ->
                     main.post {
                         bar.progress = progress
                         text.text = progress.toString() + "%"
@@ -796,7 +699,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
                 dialog.dismiss()
                 result.onSuccess {
                     refreshEngine()
-                    Toast.makeText(this, "モデルをインストールしました", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Qwen3-1.7Bをインストールしました", Toast.LENGTH_LONG).show()
                 }.onFailure {
                     Toast.makeText(this, "ダウンロード失敗: " + it.message, Toast.LENGTH_LONG).show()
                 }
@@ -870,7 +773,6 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
     override fun onDestroy() {
         super.onDestroy()
-        main.removeCallbacks(frontierWatch)
         worker.shutdownNow()
         runCatching { engine.close() }
     }
@@ -883,7 +785,6 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
 
     companion object {
         private const val MAX_NODES = 5000
-        private const val FRONTIER_ACTIVE_MS = 1900L
 
         private val BG = Color.rgb(247, 248, 251)
         private val FIELD = Color.rgb(244, 245, 248)
