@@ -120,7 +120,7 @@ data class GraphSession(
     val camera: CameraState = CameraState(),
     var createdAt: Long = System.currentTimeMillis(),
     var updatedAt: Long = System.currentTimeMillis(),
-    var layoutVersion: Int = 2
+    var layoutVersion: Int = 3
 ) {
     fun root(): GraphNode = nodes.values.first { it.parentId == null }
 
@@ -173,7 +173,7 @@ data class GraphSession(
         parent.expanded = true
         parent.loading = false
         updatedAt = System.currentTimeMillis()
-        layoutVersion = 2
+        layoutVersion = 3
         return out
     }
 
