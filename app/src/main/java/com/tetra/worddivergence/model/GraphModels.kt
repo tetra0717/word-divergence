@@ -73,7 +73,7 @@ data class Candidate(
 data class CameraState(
     var centerX: Float = 0f,
     var centerY: Float = 0f,
-    var scale: Float = 1f
+    var scale: Float = 0.86f
 )
 
 data class GraphSession(
@@ -110,7 +110,7 @@ data class GraphSession(
             val normalized = candidate.semanticDistance.coerceIn(0.02f, 1.35f)
             // Larger semantic canvas than the prototype. Radius remains monotonic
             // with root semantic distance while providing room for readable nodes.
-            val semanticRadius = 180f + normalized * 2550f
+            val semanticRadius = 90f + normalized * 1150f
 
             val desiredAngle = if (parent.parentId == null) {
                 2f * PI.toFloat() * index / count
