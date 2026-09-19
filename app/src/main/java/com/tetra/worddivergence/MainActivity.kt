@@ -491,7 +491,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
                             node.y = position.y
                         }
                     }
-                    session.layoutVersion = 2
+                    session.layoutVersion = 3
                     graphView.refreshSession()
                     persist(session)
                 }
@@ -629,7 +629,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         updateFilterLabel()
         graphView.setSession(session, resetCamera = true)
 
-        if (session.layoutVersion < 2) requestLayout(session)
+        if (session.layoutVersion < 3) requestLayout(session)
 
         session.nodes.values.firstOrNull { it.starred }?.let {
             detailText.text = "★ " + it.text + " が保存されています"
