@@ -1,18 +1,18 @@
 package com.tetra.worddivergence.graph
 
 import com.tetra.worddivergence.model.GraphNode
-import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sqrt
 
 /**
- * Deterministic force-directed layout inspired by the classic
- * link + charge + collision pattern.
+ * Deterministic force-directed layout:
+ * - link springs keep parent/child relationships readable
+ * - local many-body charge opens space organically
+ * - an explicit final collision solver guarantees visible bubbles do not overlap
  *
- * It intentionally does NOT encode semantic distance into geometry.
- * Root stays anchored at (0, 0). All other nodes are allowed to relax.
+ * Semantic distance is NOT encoded into geometry.
  */
 object ForceGraphLayout {
 
@@ -47,43 +47,41 @@ object ForceGraphLayout {
         val byId = sim.withIndex().associate { it.value.id to it.index }
 
         val iterations = when {
-            sim.size < 250 -> 64
-            sim.size < 900 -> 46
-            sim.size < 2200 -> 30
-            else -> 20
+            sim.size < 250 -> 70
+            sim.size < 900 -> 52
+            sim.size < 2200 -> 34
+            else -> 24
         }
 
         repeat(iterations) { iteration ->
             val t = iteration.toFloat() / max(1, iterations - 1)
-            val alpha = 0.92f * (1f - t) * (1f - t) + 0.06f
-
+            val alpha = 0.90f * (1f - t) * (1f - t) + 0.05f
             val fx = FloatArray(sim.size)
             val fy = FloatArray(sim.size)
 
             applyLinkForce(sim, byId, fx, fy, alpha)
-            applyLocalChargeAndCollision(sim, fx, fy, alpha)
+            applyChargeAndSoftCollision(sim, fx, fy, alpha)
 
             for (i in sim.indices) {
-                val n = sim[i]
-                if (n.root) {
-                    n.x = 0f
-                    n.y = 0f
-                    n.vx = 0f
-                    n.vy = 0f
+                val node = sim[i]
+                if (node.root) {
+                    node.x = 0f
+                    node.y = 0f
+                    node.vx = 0f
+                    node.vy = 0f
                     continue
                 }
 
-                // Small global gravity keeps connected components compact without
-                // forcing a radial semantic layout.
-                fx[i] += -n.x * 0.0016f * alpha
-                fy[i] += -n.y * 0.0016f * alpha
-
-                n.vx = (n.vx + fx[i]).coerceIn(-26f, 26f) * 0.70f
-                n.vy = (n.vy + fy[i]).coerceIn(-26f, 26f) * 0.70f
-                n.x += n.vx
-                n.y += n.vy
+                node.vx = (node.vx + fx[i]).coerceIn(-32f, 32f) * 0.72f
+                node.vy = (node.vy + fy[i]).coerceIn(-32f, 32f) * 0.72f
+                node.x += node.vx
+                node.y += node.vy
             }
         }
+
+        // A fixed number of deterministic relaxation passes, not a heuristic
+        // "freeze when settled" rule. This protects readability at high density.
+        resolveHardCollisions(sim)
 
         return sim.associate { it.id to Position(it.x, it.y) }
     }
@@ -98,8 +96,8 @@ object ForceGraphLayout {
         for (i in nodes.indices) {
             val child = nodes[i]
             val parentId = child.parentId ?: continue
-            val pIndex = byId[parentId] ?: continue
-            val parent = nodes[pIndex]
+            val parentIndex = byId[parentId] ?: continue
+            val parent = nodes[parentIndex]
 
             var dx = child.x - parent.x
             var dy = child.y - parent.y
@@ -110,8 +108,8 @@ object ForceGraphLayout {
                 distance = 1f
             }
 
-            val desired = parent.radius + child.radius + 86f
-            val spring = (distance - desired) * 0.055f * alpha
+            val desired = parent.radius + child.radius + 125f
+            val spring = (distance - desired) * 0.045f * alpha
             val ux = dx / distance
             val uy = dy / distance
             val sx = ux * spring
@@ -120,34 +118,25 @@ object ForceGraphLayout {
             fx[i] -= sx
             fy[i] -= sy
             if (!parent.root) {
-                fx[pIndex] += sx
-                fy[pIndex] += sy
+                fx[parentIndex] += sx
+                fy[parentIndex] += sy
             }
         }
     }
 
-    private fun applyLocalChargeAndCollision(
+    private fun applyChargeAndSoftCollision(
         nodes: List<SimNode>,
         fx: FloatArray,
         fy: FloatArray,
         alpha: Float
     ) {
-        val cellSize = 230f
-        val grid = HashMap<Long, MutableList<Int>>()
-
-        fun cell(v: Float): Int = kotlin.math.floor(v / cellSize).toInt()
-        fun key(x: Int, y: Int): Long =
-            (x.toLong() shl 32) xor (y.toLong() and 0xffffffffL)
-
-        for (i in nodes.indices) {
-            val n = nodes[i]
-            grid.getOrPut(key(cell(n.x), cell(n.y))) { ArrayList() }.add(i)
-        }
+        val cellSize = 320f
+        val grid = buildGrid(nodes, cellSize)
 
         for (i in nodes.indices) {
             val a = nodes[i]
-            val cx = cell(a.x)
-            val cy = cell(a.y)
+            val cx = cell(a.x, cellSize)
+            val cy = cell(a.y, cellSize)
 
             for (gx in (cx - 1)..(cx + 1)) {
                 for (gy in (cy - 1)..(cy + 1)) {
@@ -159,7 +148,6 @@ object ForceGraphLayout {
                         var dx = b.x - a.x
                         var dy = b.y - a.y
                         var distance = hypot(dx, dy)
-
                         if (distance < 0.001f) {
                             dx = deterministicUnitX(a.id + b.id)
                             dy = deterministicUnitY(a.id + b.id)
@@ -168,24 +156,21 @@ object ForceGraphLayout {
 
                         val ux = dx / distance
                         val uy = dy / distance
-                        val minDistance = a.radius + b.radius + 18f
+                        val minDistance = a.radius + b.radius + 22f
 
                         var push = 0f
                         if (distance < minDistance) {
-                            // Strong soft collision.
-                            push += (minDistance - distance) * 0.42f * alpha
+                            push += (minDistance - distance) * 0.60f * alpha
                         }
-
-                        if (distance < 220f) {
-                            // Local many-body charge. Finite range keeps 5k nodes practical.
-                            val safe = max(distance, 28f)
-                            push += min(6.5f, 3600f / (safe * safe)) * alpha
+                        if (distance < 300f) {
+                            val safe = max(distance, 35f)
+                            push += min(12f, 12000f / (safe * safe)) * alpha
                         }
 
                         if (push <= 0f) continue
-
                         val px = ux * push
                         val py = uy * push
+
                         if (!a.root) {
                             fx[i] -= px
                             fy[i] -= py
@@ -199,6 +184,88 @@ object ForceGraphLayout {
             }
         }
     }
+
+    private fun resolveHardCollisions(nodes: List<SimNode>) {
+        val cellSize = 260f
+
+        repeat(30) {
+            val grid = buildGrid(nodes, cellSize)
+            var maximumOverlap = 0f
+
+            for (i in nodes.indices) {
+                val a = nodes[i]
+                val cx = cell(a.x, cellSize)
+                val cy = cell(a.y, cellSize)
+
+                for (gx in (cx - 1)..(cx + 1)) {
+                    for (gy in (cy - 1)..(cy + 1)) {
+                        val bucket = grid[key(gx, gy)] ?: continue
+                        for (j in bucket) {
+                            if (j <= i) continue
+                            val b = nodes[j]
+
+                            var dx = b.x - a.x
+                            var dy = b.y - a.y
+                            var distance = hypot(dx, dy)
+                            val required = a.radius + b.radius + 18f
+                            if (distance >= required) continue
+
+                            if (distance < 0.001f) {
+                                dx = deterministicUnitX(a.id + b.id)
+                                dy = deterministicUnitY(a.id + b.id)
+                                distance = 1f
+                            }
+
+                            val overlap = required - distance
+                            maximumOverlap = max(maximumOverlap, overlap)
+                            val ux = dx / distance
+                            val uy = dy / distance
+
+                            when {
+                                a.root -> {
+                                    b.x += ux * overlap
+                                    b.y += uy * overlap
+                                }
+                                b.root -> {
+                                    a.x -= ux * overlap
+                                    a.y -= uy * overlap
+                                }
+                                else -> {
+                                    val shift = overlap * 0.55f
+                                    a.x -= ux * shift
+                                    a.y -= uy * shift
+                                    b.x += ux * shift
+                                    b.y += uy * shift
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (maximumOverlap < 0.5f) return
+        }
+    }
+
+    private fun buildGrid(
+        nodes: List<SimNode>,
+        cellSize: Float
+    ): HashMap<Long, MutableList<Int>> {
+        val grid = HashMap<Long, MutableList<Int>>()
+        for (i in nodes.indices) {
+            val n = nodes[i]
+            grid.getOrPut(key(cell(n.x, cellSize), cell(n.y, cellSize))) {
+                ArrayList()
+            }.add(i)
+        }
+        return grid
+    }
+
+    private fun cell(value: Float, cellSize: Float): Int =
+        floor(value / cellSize).toInt()
+
+    private fun key(x: Int, y: Int): Long =
+        (x.toLong() shl 32) xor (y.toLong() and 0xffffffffL)
 
     private fun deterministicUnitX(seed: String): Float {
         val angle = ((seed.hashCode() and 0xffff) / 65535.0) * Math.PI * 2.0
