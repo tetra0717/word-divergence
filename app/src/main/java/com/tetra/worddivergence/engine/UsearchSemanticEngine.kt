@@ -52,6 +52,7 @@ class UsearchSemanticEngine(modelDir: File) : SemanticEngine {
     override fun generateChildren(
         rootText: String,
         parentText: String,
+        path: List<String>,
         parentDistance: Float,
         count: Int,
         minSimilarity: Float,
