@@ -31,6 +31,11 @@ interface InferenceEngine {
     fun sendUserPrompt(message: String, predictLength: Int = DEFAULT_PREDICT_LENGTH): Flow<String>
 
     /**
+     * Clears prior turns while keeping the loaded model and system prompt.
+     */
+    suspend fun resetConversation()
+
+    /**
      * Runs a benchmark with the specified parameters.
      */
     suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String
