@@ -6,10 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.SystemClock
-import android.text.Layout
-import android.text.StaticLayout
 import android.text.TextPaint
-import android.text.TextUtils
 import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -20,7 +17,6 @@ import com.tetra.worddivergence.model.GraphSession
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sqrt
 
 class SemanticGraphView @JvmOverloads constructor(
@@ -53,13 +49,14 @@ class SemanticGraphView @JvmOverloads constructor(
     private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(247, 248, 251)
     }
-    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(42, 92, 99, 112)
-        style = Paint.Style.FILL
-    }
     private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(148, 174, 181, 193)
-        strokeWidth = dp(1.15f)
+        color = Color.argb(44, 125, 132, 145)
+        strokeWidth = dp(0.8f)
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val activeEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(210, 99, 102, 241)
+        strokeWidth = dp(1.45f)
         strokeCap = Paint.Cap.ROUND
     }
     private val nodeFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -256,7 +253,6 @@ class SemanticGraphView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.drawColor(backgroundPaint.color)
-        drawDotGrid(canvas)
 
         val s = session ?: return
         val visible = spatial.query(visibleWorldRect(110f))
@@ -280,89 +276,88 @@ class SemanticGraphView @JvmOverloads constructor(
         if (hasVisibleLoading) postInvalidateOnAnimation()
     }
 
-    private fun drawDotGrid(canvas: Canvas) {
-        val spacing = 34f
-        val rect = visibleWorldRect(0f)
-        val startX = floor(rect.left / spacing) * spacing
-        val startY = floor(rect.top / spacing) * spacing
-        val dotRadius = dp(if (scale < 0.45f) 0.65f else 0.8f)
-
-        var x = startX
-        while (x <= rect.right) {
-            var y = startY
-            while (y <= rect.bottom) {
-                canvas.drawCircle(worldToScreenX(x), worldToScreenY(y), dotRadius, gridPaint)
-                y += spacing
-            }
-            x += spacing
-        }
-    }
-
     private fun drawEdge(canvas: Canvas, parent: GraphNode, child: GraphNode) {
-        val dx = child.x - parent.x
-        val dy = child.y - parent.y
-        val length = sqrt(dx * dx + dy * dy)
-        if (length <= 0.001f) return
+        val selected = selectedId
+        val incident = selected != null && (parent.id == selected || child.id == selected)
+        val paint = if (incident) activeEdgePaint else edgePaint
 
-        val ux = dx / length
-        val uy = dy / length
-        val startX = parent.x + ux * parent.visualRadius()
-        val startY = parent.y + uy * parent.visualRadius()
-        val endX = child.x - ux * child.visualRadius()
-        val endY = child.y - uy * child.visualRadius()
+        if (selected != null && !incident) {
+            paint.alpha = 20
+        } else {
+            paint.alpha = if (incident) 220 else 52
+        }
 
+        // Like Obsidian, links are straight and sit behind opaque nodes.
+        // Drawing center-to-center lets the node fill cleanly mask the ends.
         canvas.drawLine(
-            worldToScreenX(startX),
-            worldToScreenY(startY),
-            worldToScreenX(endX),
-            worldToScreenY(endY),
-            edgePaint
+            worldToScreenX(parent.x),
+            worldToScreenY(parent.y),
+            worldToScreenX(child.x),
+            worldToScreenY(child.y),
+            paint
         )
+        paint.alpha = 255
     }
 
     private fun drawNode(canvas: Canvas, node: GraphNode) {
         val sx = worldToScreenX(node.x)
         val sy = worldToScreenY(node.y)
         val isRoot = node.parentId == null
-        val screenRadius = node.visualRadius() * worldScale()
 
-        // At very far zoom, use a clean dot representation instead of trying
-        // to squeeze unreadable labels into tiny circles.
-        if (scale < 0.30f) {
-            val r = dp(if (isRoot) 5.2f else 3.8f)
+        // Obsidian-style contextual zoom: far away = compact points, closer = labels.
+        if (scale < 0.34f) {
+            val r = dp(if (isRoot) 5.4f else 3.7f)
             canvas.drawCircle(sx, sy, r, if (isRoot) rootStroke else nodeStroke)
             return
         }
 
+        val widthPx = node.visualWidth() * worldScale()
+        val heightPx = node.visualHeight() * worldScale()
+        val rect = RectF(
+            sx - widthPx / 2f,
+            sy - heightPx / 2f,
+            sx + widthPx / 2f,
+            sy + heightPx / 2f
+        )
+        val corner = heightPx / 2f
+
         if (selectedId == node.id) {
-            canvas.drawCircle(sx, sy, screenRadius + dp(7f), selectedHalo)
+            val halo = RectF(rect).apply { inset(-dp(5f), -dp(5f)) }
+            canvas.drawRoundRect(halo, corner + dp(5f), corner + dp(5f), selectedHalo)
         }
 
-        canvas.drawCircle(sx, sy, screenRadius, if (isRoot) rootFill else nodeFill)
-        canvas.drawCircle(sx, sy, screenRadius, if (isRoot) rootStroke else nodeStroke)
+        canvas.drawRoundRect(rect, corner, corner, if (isRoot) rootFill else nodeFill)
+        canvas.drawRoundRect(rect, corner, corner, if (isRoot) rootStroke else nodeStroke)
 
         if (selectedId == node.id) {
-            canvas.drawCircle(sx, sy, screenRadius + dp(2.5f), selectedStroke)
+            val selectedRect = RectF(rect).apply { inset(-dp(1.5f), -dp(1.5f)) }
+            canvas.drawRoundRect(
+                selectedRect,
+                corner + dp(1.5f),
+                corner + dp(1.5f),
+                selectedStroke
+            )
         }
 
         if (node.starred) {
-            val badgeR = dp(10f)
-            val bx = sx + screenRadius * 0.72f
-            val by = sy - screenRadius * 0.72f
+            val badgeR = dp(8.5f)
+            val bx = rect.right - badgeR * 0.25f
+            val by = rect.top + badgeR * 0.25f
             canvas.drawCircle(bx, by, badgeR, starFill)
             val baseline = by - (starText.ascent() + starText.descent()) / 2f
             canvas.drawText("★", bx, baseline, starText)
         }
 
         if (node.loading) {
-            val rr = screenRadius + dp(6.5f)
-            val rect = RectF(sx - rr, sy - rr, sx + rr, sy + rr)
+            val rr = dp(10f)
+            val cx = rect.right + dp(8f)
+            val spinnerRect = RectF(cx - rr, sy - rr, cx + rr, sy + rr)
             val phase = ((SystemClock.uptimeMillis() / 3L) % 360L).toFloat()
-            canvas.drawArc(rect, phase, 235f, false, spinnerPaint)
+            canvas.drawArc(spinnerRect, phase, 235f, false, spinnerPaint)
         }
 
-        if (scale >= 0.42f) {
-            drawNodeText(canvas, node, sx, sy, screenRadius, isRoot)
+        if (scale >= 0.44f) {
+            drawNodeText(canvas, node, sx, sy, isRoot)
         }
     }
 
@@ -371,37 +366,27 @@ class SemanticGraphView @JvmOverloads constructor(
         node: GraphNode,
         sx: Float,
         sy: Float,
-        radiusPx: Float,
         isRoot: Boolean
     ) {
         val paint = if (isRoot) rootTextPaint else textPaint
-        val zoomTextScale = scale.coerceIn(0.78f, 1.18f)
-        paint.textSize = sp(if (isRoot) 13f else 12.2f) * zoomTextScale
+        val zoomTextScale = scale.coerceIn(0.82f, 1.08f)
+        paint.textSize = sp(if (isRoot) 12.8f else 12f) * zoomTextScale
+        paint.textAlign = Paint.Align.CENTER
 
-        val horizontalPadding = dp(10f)
-        val width = ((radiusPx * 1.52f) - horizontalPadding * 2f)
-            .toInt()
-            .coerceAtLeast(dp(28f).toInt())
+        val lines = com.tetra.worddivergence.model.nodeLabelLines(node.text)
+        val lineHeight = paint.fontSpacing * 0.92f
+        val totalHeight = lineHeight * lines.size
 
-        val layout = StaticLayout.Builder
-            .obtain(node.text, 0, node.text.length, paint, width)
-            .setAlignment(Layout.Alignment.ALIGN_CENTER)
-            .setIncludePad(false)
-            .setMaxLines(if (node.text.length > 18) 3 else 2)
-            .setEllipsize(TextUtils.TruncateAt.END)
-            .setLineSpacing(0f, 0.96f)
-            .build()
-
-        canvas.save()
-        canvas.translate(sx - width / 2f, sy - layout.height / 2f)
-        layout.draw(canvas)
-        canvas.restore()
+        lines.forEachIndexed { index, line ->
+            val baseline = sy - totalHeight / 2f + lineHeight * (index + 0.72f)
+            canvas.drawText(line, sx, baseline, paint)
+        }
     }
 
     private fun hitTest(screenX: Float, screenY: Float): String? {
         val wx = centerX + (screenX - width / 2f) / worldScale()
         val wy = centerY + (screenY - height / 2f) / worldScale()
-        val probe = 92f
+        val probe = 220f
         val ids = spatial.query(RectF(wx - probe, wy - probe, wx + probe, wy + probe))
         val s = session ?: return null
 
@@ -409,9 +394,13 @@ class SemanticGraphView @JvmOverloads constructor(
         var bestD = Float.MAX_VALUE
         for (id in ids) {
             val node = s.nodes[id] ?: continue
+            val halfW = node.visualWidth() / 2f + 6f
+            val halfH = node.visualHeight() / 2f + 6f
+            if (wx !in (node.x - halfW)..(node.x + halfW)) continue
+            if (wy !in (node.y - halfH)..(node.y + halfH)) continue
+
             val d = hypot(node.x - wx, node.y - wy)
-            val touchRadius = node.visualRadius() + 7f / max(scale, 0.35f)
-            if (d <= touchRadius && d < bestD) {
+            if (d < bestD) {
                 best = id
                 bestD = d
             }
