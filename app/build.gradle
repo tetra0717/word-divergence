@@ -5,14 +5,14 @@ plugins {
 android {
     namespace = 'com.tetra.worddivergence'
     compileSdk = 36
-    ndkVersion = '27.2.12479018'
+    ndkVersion = '29.0.13113456'
 
     defaultConfig {
         applicationId = 'com.tetra.worddivergence'
-        minSdk = 29
+        minSdk = 33
         targetSdk = 36
         versionCode = (project.findProperty('ciVersionCode') ?: '1').toInteger()
-        versionName = "0.1." + (project.findProperty('ciVersionCode') ?: '0')
+        versionName = "0.2." + (project.findProperty('ciVersionCode') ?: '0')
 
         externalNativeBuild {
             cmake {
@@ -36,7 +36,12 @@ android {
     externalNativeBuild {
         cmake {
             path = file('src/main/cpp/CMakeLists.txt')
-            version = '3.22.1'
+            version = '3.31.6'
         }
     }
+}
+
+
+dependencies {
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0'
 }
