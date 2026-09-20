@@ -26,10 +26,13 @@ data class LlmDownloadProgress(
 }
 
 class LlmModelManager(private val context: Context) {
-    private val legacyModelsDir = File(context.filesDir, "models")
-    private val legacyModelFile = File(legacyModelsDir, MODEL_FILE)
-    private val legacyMarker = File(legacyModelsDir, MODEL_FILE + ".sha256-ok")
+    // llama.cpp's official Android example copies GGUF files into filesDir/models
+    // before loading them. Keep that as the canonical inference location.
+    private val internalModelsDir = File(context.filesDir, "models")
+    private val internalModelFile = File(internalModelsDir, MODEL_FILE)
+    private val internalMarker = File(internalModelsDir, MODEL_FILE + ".sha256-ok")
 
+    // DownloadManager needs a destination it can own. This is staging only.
     private val externalModelsDir = File(
         requireNotNull(context.getExternalFilesDir(null)) {
             "External app storage is unavailable"
@@ -48,18 +51,60 @@ class LlmModelManager(private val context: Context) {
     private val downloadManager =
         context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
 
-    val modelFile: File
-        get() = when {
-            isValidModel(externalModelFile, externalMarker) -> externalModelFile
-            isValidModel(legacyModelFile, legacyMarker) -> legacyModelFile
-            else -> externalModelFile
+    fun isInstalled(): Boolean =
+        isValidModel(internalModelFile, internalMarker) ||
+            isValidModel(externalModelFile, externalMarker)
+
+    /**
+     * Returns an internal-storage GGUF suitable for llama.cpp mmap/load.
+     *
+     * Existing builds stored the verified model in getExternalFilesDir().
+     * Migrate that file locally on first inference instead of downloading it again.
+     */
+    fun ensureInternalModel(onProgress: ((String) -> Unit)? = null): File {
+        if (isValidModel(internalModelFile, internalMarker)) return internalModelFile
+
+        check(isValidModel(externalModelFile, externalMarker)) {
+            "Verified Qwen model is not installed"
         }
 
-    fun isInstalled(): Boolean =
-        isValidModel(externalModelFile, externalMarker) ||
-            isValidModel(legacyModelFile, legacyMarker)
+        internalModelsDir.mkdirs()
+        onProgress?.invoke("Qwenモデルを内部ストレージへ移行中…")
+
+        val temp = File(internalModelsDir, MODEL_FILE + ".migrating")
+        temp.delete()
+
+        externalModelFile.inputStream().buffered(1024 * 1024).use { input ->
+            temp.outputStream().buffered(1024 * 1024).use { output ->
+                input.copyTo(output, 1024 * 1024)
+            }
+        }
+
+        check(temp.length() == externalModelFile.length()) {
+            temp.delete()
+            "Qwen model migration size mismatch"
+        }
+
+        // External source was already SHA-verified before its marker was written,
+        // but verify again after the cross-filesystem copy before activation.
+        check(sha256(temp).equals(MODEL_SHA256, ignoreCase = true)) {
+            temp.delete()
+            "Qwen model migration checksum mismatch"
+        }
+
+        if (internalModelFile.exists()) internalModelFile.delete()
+        check(temp.renameTo(internalModelFile)) {
+            "Could not activate internally stored Qwen model"
+        }
+        internalMarker.writeText(MODEL_SHA256)
+
+        externalModelFile.delete()
+        externalMarker.delete()
+        return internalModelFile
+    }
 
     fun downloadAndInstall(onProgress: (LlmDownloadProgress) -> Unit) {
+        internalModelsDir.mkdirs()
         externalModelsDir.mkdirs()
         downloadDir.mkdirs()
 
@@ -83,26 +128,23 @@ class LlmModelManager(private val context: Context) {
                     cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
                 )
                 val percent = if (total > 0L) {
-                    ((downloaded * 96L) / total).toInt().coerceIn(0, 96)
+                    ((downloaded * 94L) / total).toInt().coerceIn(0, 94)
                 } else {
                     0
                 }
 
                 when (status) {
-                    DownloadManager.STATUS_PENDING -> {
+                    DownloadManager.STATUS_PENDING ->
                         onProgress(LlmDownloadProgress(percent, downloaded, total, "待機中"))
-                    }
 
-                    DownloadManager.STATUS_RUNNING -> {
+                    DownloadManager.STATUS_RUNNING ->
                         onProgress(LlmDownloadProgress(percent, downloaded, total, "ダウンロード中"))
-                    }
 
-                    DownloadManager.STATUS_PAUSED -> {
+                    DownloadManager.STATUS_PAUSED ->
                         onProgress(LlmDownloadProgress(percent, downloaded, total, "一時停止・再開待ち"))
-                    }
 
                     DownloadManager.STATUS_SUCCESSFUL -> {
-                        onProgress(LlmDownloadProgress(97, downloaded, total, "検証中"))
+                        onProgress(LlmDownloadProgress(95, downloaded, total, "検証中"))
                         break
                     }
 
@@ -135,22 +177,37 @@ class LlmModelManager(private val context: Context) {
 
         onProgress(
             LlmDownloadProgress(
-                98,
+                96,
                 downloadFile.length(),
                 downloadFile.length(),
-                "インストール中"
+                "内部ストレージへ配置中"
             )
         )
 
-        if (externalModelFile.exists()) externalModelFile.delete()
-        if (!downloadFile.renameTo(externalModelFile)) {
-            downloadFile.copyTo(externalModelFile, overwrite = true)
-            downloadFile.delete()
+        val temp = File(internalModelsDir, MODEL_FILE + ".installing")
+        temp.delete()
+        downloadFile.inputStream().buffered(1024 * 1024).use { input ->
+            temp.outputStream().buffered(1024 * 1024).use { output ->
+                input.copyTo(output, 1024 * 1024)
+            }
         }
-        externalMarker.writeText(MODEL_SHA256)
 
-        if (legacyModelFile.exists()) legacyModelFile.delete()
-        if (legacyMarker.exists()) legacyMarker.delete()
+        check(temp.length() == downloadFile.length()) {
+            temp.delete()
+            "Installed Qwen file size mismatch"
+        }
+
+        if (internalModelFile.exists()) internalModelFile.delete()
+        check(temp.renameTo(internalModelFile)) {
+            "Could not activate internally stored Qwen model"
+        }
+        internalMarker.writeText(MODEL_SHA256)
+
+        downloadFile.delete()
+        externalModelFile.delete()
+        externalMarker.delete()
+
+        // The old fastText/HNSW pack is no longer used by Brainstorm.
         File(context.filesDir, "model-pack").deleteRecursively()
         File(context.filesDir, "model-pack-old").deleteRecursively()
         File(context.filesDir, "model-pack-staging").deleteRecursively()
@@ -161,8 +218,8 @@ class LlmModelManager(private val context: Context) {
         onProgress(
             LlmDownloadProgress(
                 100,
-                externalModelFile.length(),
-                externalModelFile.length(),
+                internalModelFile.length(),
+                internalModelFile.length(),
                 "完了"
             )
         )
@@ -173,10 +230,10 @@ class LlmModelManager(private val context: Context) {
         if (id >= 0L) runCatching { downloadManager.remove(id) }
         prefs.edit().clear().apply()
 
+        internalModelFile.delete()
+        internalMarker.delete()
         externalModelFile.delete()
         externalMarker.delete()
-        legacyModelFile.delete()
-        legacyMarker.delete()
         downloadFile.delete()
     }
 
