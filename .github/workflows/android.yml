@@ -4,6 +4,9 @@ concurrency:
   group: word-divergence-main-signing
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [ main ]
@@ -34,3 +37,17 @@ jobs:
         with:
           name: word-divergence-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish latest Android build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk word-divergence-debug.apk
+          zip -j word-divergence-debug.zip word-divergence-debug.apk
+
+          if ! gh release view android-latest >/dev/null 2>&1; then
+            gh release create android-latest               --target "$GITHUB_SHA"               --title "Latest Android debug build"               --notes "Latest signed Android build of word-divergence. Install word-divergence-debug.apk directly on Android."
+          fi
+
+          gh release upload android-latest             word-divergence-debug.apk             word-divergence-debug.zip             --clobber
