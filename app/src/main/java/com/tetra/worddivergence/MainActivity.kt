@@ -702,8 +702,8 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
             val result = runCatching {
                 llmModel.downloadAndInstall { progress ->
                     main.post {
-                        bar.progress = progress
-                        text.text = progress.toString() + "%"
+                        bar.progress = progress.percent
+                        text.text = progress.label
                     }
                 }
             }
