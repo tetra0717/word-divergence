@@ -13,7 +13,7 @@ import java.io.File
 
 class LlmSemanticEngine(
     context: Context,
-    private val modelFile: File
+    private val modelManager: LlmModelManager
 ) : SemanticEngine {
     override val label: String = "Qwen3-1.7B • local"
 
@@ -77,7 +77,7 @@ class LlmSemanticEngine(
 
     private fun ensureLoaded() {
         if (loaded) return
-        check(modelFile.isFile) { "Qwen model file is missing" }
+        val modelFile = modelManager.ensureInternalModel()
 
         runBlocking {
             when (val state = engine.state.value) {
