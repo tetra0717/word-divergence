@@ -26,13 +26,6 @@ jobs:
       - name: Install Android SDK 36
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;29.0.13113456" "cmake;3.31.6"
 
-      - name: Restore stable debug signing key
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: word-divergence-debug-keystore-v1
-
       - name: Build debug APK
         run: ./gradlew --no-daemon -PciVersionCode=${{ github.run_number }} assembleDebug
 
