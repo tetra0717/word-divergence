@@ -165,9 +165,16 @@ internal class InferenceEngineImpl private constructor(
                 Log.i(TAG, "Loading model... \n$pathToModel")
                 _readyForSystemPrompt = false
                 _state.value = InferenceEngine.State.LoadingModel
-                load(pathToModel).let {
-                    // TODO-han.yin: find a better way to pass other error codes
-                    if (it != 0) throw UnsupportedArchitectureException()
+                load(pathToModel).let { code ->
+                    if (code != 0) {
+                        val file = File(pathToModel)
+                        throw IOException(
+                            "llama.cpp failed to load GGUF model " +
+                                "(nativeCode=" + code +
+                                ", size=" + file.length() +
+                                ", path=" + pathToModel + ")"
+                        )
+                    }
                 }
                 prepare().let {
                     if (it != 0) throw IOException("Failed to prepare resources")
