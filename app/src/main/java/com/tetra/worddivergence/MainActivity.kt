@@ -415,7 +415,11 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
                 }.onFailure {
                     node.expanded = true
                     graphView.refreshSession()
-                    Toast.makeText(this, "生成失敗: " + (it.message ?: "unknown"), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this,
+                        "生成失敗: " + throwableSummary(it),
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
@@ -635,7 +639,7 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private fun refreshEngine() {
         runCatching { engine.close() }
         engine = if (llmModel.isInstalled()) {
-            LlmSemanticEngine(applicationContext, llmModel.modelFile)
+            LlmSemanticEngine(applicationContext, llmModel)
         } else {
             DemoSemanticEngine()
         }
@@ -788,6 +792,20 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
         super.onDestroy()
         worker.shutdownNow()
         runCatching { engine.close() }
+    }
+
+    private fun throwableSummary(t: Throwable): String {
+        val parts = ArrayList<String>()
+        var current: Throwable? = t
+        var depth = 0
+        while (current != null && depth++ < 4) {
+            val name = current.javaClass.simpleName.ifBlank { current.javaClass.name }
+            val message = current.message?.trim()?.takeIf { it.isNotEmpty() }
+            val part = if (message != null) name + ": " + message else name
+            if (part !in parts) parts += part
+            current = current.cause
+        }
+        return parts.joinToString(" ← ").ifBlank { "不明なエラー" }
     }
 
     private fun dp(value: Int): Int =
