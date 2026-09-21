@@ -368,6 +368,9 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_processSystemPrompt(
     // Reset long-term & short-term states
     reset_long_term_states();
     reset_short_term_states();
+    if (g_sampler) {
+        common_sampler_reset(g_sampler);
+    }
 
     // Obtain system prompt from JEnv
     const auto *system_prompt = env->GetStringUTFChars(jsystem_prompt, nullptr);
