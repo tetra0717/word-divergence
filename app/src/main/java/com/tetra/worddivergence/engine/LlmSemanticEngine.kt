@@ -7,13 +7,15 @@ import com.tetra.worddivergence.model.Candidate
 import com.tetra.worddivergence.model.PosFilter
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import java.io.File
 
 class LlmSemanticEngine(
     context: Context,
-    private val modelManager: LlmModelManager
+    private val modelManager: LlmModelManager,
+    private val onStatus: (String) -> Unit = {}
 ) : SemanticEngine {
     override val label: String = "Qwen3-1.7B • local"
 
@@ -35,22 +37,17 @@ class LlmSemanticEngine(
         val allowedPos = filter.enabled.joinToString("・") { it.label }
         val prompt = buildString {
             appendLine("/no_think")
-            appendLine("これは独立した1回のブレインストーミング要求です。以前の会話は無視してください。")
-            appendLine("ルート概念: 「" + rootText + "」")
-            appendLine("これまでの連想経路: " + path.joinToString(" → "))
-            appendLine("今回タップされた親ノード: 「" + parentText + "」")
-            appendLine("同じ語や、すでに経路に出た概念へ戻る候補は避けてください。")
-            appendLine("この親ノードから、日本語話者が自然に1ステップで直接連想できる語句だけを最大" + maxCount + "件返してください。")
-            appendLine("無理に件数を埋めないでください。少しでも関係が弱い、語の断片、固有名詞の一部分、文字列共起だけの候補、説明文は出さないでください。")
-            appendLine("同義語ばかりにせず、場所・用途・構成・原因・結果・行為・対象など関係の種類を分散してください。")
-            appendLine("候補は単独で意味が通る自然な日本語語句にしてください。")
-            appendLine("許可されている品詞カテゴリ: " + allowedPos + "。原則としてこの範囲だけを返してください。")
-            appendLine("各候補について、親→候補の関係を短い日本語で relation に入れてください。")
-            appendLine("出力前に各候補を内部で再検査し、不自然なものは削除してください。")
-            appendLine("出力はJSON配列だけ。Markdownや説明は禁止。")
-            appendLine("""形式: [{"word":"船","relation":"移動手段"}]""")
+            appendLine("root=" + rootText)
+            appendLine("path=" + path.joinToString("→"))
+            appendLine("parent=" + parentText)
+            appendLine("max=" + maxCount)
+            appendLine("pos=" + allowedPos)
+            appendLine("自然な直接連想だけを返す。弱い連想・語の断片・既出語は禁止。")
+            appendLine("関係の種類はできるだけ分散。無理に件数を埋めない。")
+            appendLine("""JSONのみ: [{"word":"船","relation":"移動手段"}]""")
         }
-        parseCandidates(generate(prompt, 320), maxCount, parentText, rootText)
+        val maxTokens = (64 + maxCount * 18).coerceIn(96, 220)
+        parseCandidates(generate(prompt, maxTokens), maxCount, parentText, rootText)
     }
 
     override fun randomWords(
@@ -77,7 +74,8 @@ class LlmSemanticEngine(
 
     private fun ensureLoaded() {
         if (loaded) return
-        val modelFile = modelManager.ensureInternalModel()
+        onStatus("Qwenモデルを準備中…")
+        val modelFile = modelManager.ensureInternalModel { onStatus(it) }
 
         runBlocking {
             when (val state = engine.state.value) {
@@ -101,17 +99,63 @@ class LlmSemanticEngine(
                 }
             }
 
+            onStatus("Qwenモデルを読み込み中…")
             engine.loadModel(modelFile.absolutePath)
+            onStatus("連想ルールを準備中…")
             engine.setSystemPrompt(SYSTEM_PROMPT)
             loaded = true
         }
     }
 
     private fun generate(prompt: String, maxTokens: Int): String = runBlocking {
+        onStatus("連想を生成中…")
         engine.resetConversation()
         val out = StringBuilder()
-        engine.sendUserPrompt(prompt, maxTokens).collect { out.append(it) }
+        engine.sendUserPrompt(prompt, maxTokens)
+            .takeWhile { token ->
+                out.append(token)
+                !hasCompleteJsonArray(out)
+            }
+            .collect()
         out.toString()
+    }
+
+    private fun hasCompleteJsonArray(text: CharSequence): Boolean {
+        var started = false
+        var depth = 0
+        var inString = false
+        var escaped = false
+
+        for (i in 0 until text.length) {
+            val ch = text[i]
+
+            if (inString) {
+                if (escaped) {
+                    escaped = false
+                    continue
+                }
+                when (ch) {
+                    '\\' -> escaped = true
+                    '"' -> inString = false
+                }
+                continue
+            }
+
+            when (ch) {
+                '"' -> inString = true
+                '[' -> {
+                    started = true
+                    depth++
+                }
+                ']' -> {
+                    if (started) {
+                        depth--
+                        if (depth == 0) return true
+                    }
+                }
+            }
+        }
+        return false
     }
 
     private fun parseCandidates(
@@ -174,11 +218,11 @@ class LlmSemanticEngine(
 
     companion object {
         private const val SYSTEM_PROMPT = """
-あなたは日本語のブレインストーミング用連想エンジンです。
-目的は、ユーザーがノードを辿るたびに「その一歩は自然だ」と感じる関連概念だけを返すことです。
-単なる文字列共起、語の断片、未知の略語、固有名詞の一部分を関連語として扱ってはいけません。
-件数より品質を優先し、候補が弱い場合は少数または空配列を返してください。
-出力形式の指定に厳密に従ってください。
+日本語ブレインストーミング用の連想エンジン。
+親ノードから人間に自然な1ステップ連想だけを返す。
+文字列共起だけの語、語の断片、不自然な略語、固有名詞の一部分は禁止。
+品質を件数より優先し、弱い候補は出さない。
+指定されたJSON形式だけを返す。
 /no_think
 """
     }
