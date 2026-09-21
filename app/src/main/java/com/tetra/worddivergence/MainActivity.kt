@@ -639,7 +639,11 @@ class MainActivity : Activity(), SemanticGraphView.Listener {
     private fun refreshEngine() {
         runCatching { engine.close() }
         engine = if (llmModel.isInstalled()) {
-            LlmSemanticEngine(applicationContext, llmModel)
+            LlmSemanticEngine(applicationContext, llmModel) { status ->
+                main.post {
+                    if (::detailText.isInitialized) detailText.text = status
+                }
+            }
         } else {
             DemoSemanticEngine()
         }
