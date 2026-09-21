@@ -85,13 +85,9 @@ class LlmModelManager(private val context: Context) {
             "Qwen model migration size mismatch"
         }
 
-        // External source was already SHA-verified before its marker was written,
-        // but verify again after the cross-filesystem copy before activation.
-        check(sha256(temp).equals(MODEL_SHA256, ignoreCase = true)) {
-            temp.delete()
-            "Qwen model migration checksum mismatch"
-        }
-
+        // The source already has a SHA-256 marker created only after full
+        // verification. File copy either completes or throws; matching byte size
+        // is sufficient here and avoids hashing 1.28GB a second time on upgrade.
         if (internalModelFile.exists()) internalModelFile.delete()
         check(temp.renameTo(internalModelFile)) {
             "Could not activate internally stored Qwen model"
