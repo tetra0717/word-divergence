@@ -22,6 +22,7 @@ class LlmSemanticEngine(
     private val engine: InferenceEngine = AiChat.getInferenceEngine(context.applicationContext)
     private val lock = Any()
     @Volatile private var loaded = false
+    private var needsConversationReset = false
 
     override fun generateChildren(
         rootText: String,
@@ -104,12 +105,16 @@ class LlmSemanticEngine(
             onStatus("連想ルールを準備中…")
             engine.setSystemPrompt(SYSTEM_PROMPT)
             loaded = true
+            needsConversationReset = false
         }
     }
 
     private fun generate(prompt: String, maxTokens: Int): String = runBlocking {
         onStatus("連想を生成中…")
-        engine.resetConversation()
+        if (needsConversationReset) {
+            engine.resetConversation()
+        }
+        needsConversationReset = true
         val out = StringBuilder()
         engine.sendUserPrompt(prompt, maxTokens)
             .takeWhile { token ->
