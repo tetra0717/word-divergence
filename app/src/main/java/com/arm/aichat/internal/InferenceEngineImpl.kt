@@ -168,9 +168,14 @@ internal class InferenceEngineImpl private constructor(
                 load(pathToModel).let { code ->
                     if (code != 0) {
                         val file = File(pathToModel)
+                        val detail = when (code) {
+                            2 -> "GGML CPU backend plugins were not discovered"
+                            1 -> "llama_model_load_from_file returned null"
+                            else -> "unknown native load error"
+                        }
                         throw IOException(
-                            "llama.cpp failed to load GGUF model " +
-                                "(nativeCode=" + code +
+                            "llama.cpp failed to load GGUF model: " + detail +
+                                " (nativeCode=" + code +
                                 ", size=" + file.length() +
                                 ", path=" + pathToModel + ")"
                         )
