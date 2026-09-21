@@ -53,12 +53,17 @@ Java_com_arm_aichat_internal_InferenceEngineImpl_init(JNIEnv *env, jobject /*unu
 
     // Initialize backends
     llama_backend_init();
-    LOGi("Backend initiated; Log handler set.");
+    LOGi("Backend initiated; Log handler set. Registered backends: %zu", ggml_backend_reg_count());
 }
 
 extern "C"
 JNIEXPORT jint JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
+    if (ggml_backend_reg_count() == 0) {
+        LOGe("%s: no GGML backend plugins were registered", __func__);
+        return 2;
+    }
+
     llama_model_params model_params = llama_model_default_params();
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
